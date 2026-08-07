@@ -361,3 +361,164 @@ def find_model_branches(root: Path) -> list[Violation]:
             elif isinstance(node, ast.Match):
                 violations.extend(_match_violations(node, relative))
     return sorted(violations, key=lambda violation: (violation.path, violation.line))
+
+
+# --- Guard 4: no `print`, and no logger obtained outside the observability module ------------
+
+STRUCTURED_LOGGING_MODULE = "src/video_agent/observability/logging.py"
+"""The one module that may touch `logging` directly. `observability.md` §11 requires that no
+`print` and no unstructured logger exists in the tree; a single accessor is what makes the rest
+of the rule checkable, because "unstructured" is otherwise a judgement call."""
+
+STDOUT_STREAMS: frozenset[str] = frozenset({"stdout", "stderr"})
+
+PRE_LOGGING_BOOTSTRAP_PATHS: tuple[str, ...] = ("src/video_agent/__main__.py",)
+"""Files that may write to `sys.stderr` because they run before logging can be configured.
+
+Exactly one, and the exemption is architectural rather than temporary. The startup preflight's
+first assertion is the media-toolchain pin, which must hold *even when configuration is
+unreadable* — and `configure_logging` needs `Settings`. A process refusing to start because it
+cannot read its own configuration has no `Settings`, no trace and no sink; a stderr sentence is
+the only thing it can honestly emit.
+
+The exemption is narrow in two directions. It covers `sys.stderr.write` only: `print` remains
+banned in this file like everywhere else. And it names one path, so a second module cannot
+inherit it by living in the same package.
+"""
+
+UNSTRUCTURED_LOGGING_CALLS: frozenset[str] = frozenset(
+    {
+        "getLogger",
+        "basicConfig",
+        "log",
+        "debug",
+        "info",
+        "warning",
+        "warn",
+        "error",
+        "exception",
+        "critical",
+        "fatal",
+    }
+)
+"""Attributes of the `logging` module that either mint a logger or write to the root one.
+
+`logging.info(...)` is the quieter half of the problem: it calls `basicConfig` implicitly, so
+the first module to use it decides the format for the whole process — usually to plain text,
+usually long before `configure_logging` runs."""
+
+
+def _is_stdio_write(node: ast.Call) -> bool:
+    func = node.func
+    if not isinstance(func, ast.Attribute) or func.attr != "write":
+        return False
+    stream = func.value
+    return (
+        isinstance(stream, ast.Attribute)
+        and stream.attr in STDOUT_STREAMS
+        and isinstance(stream.value, ast.Name)
+        and stream.value.id == "sys"
+    )
+
+
+def find_print_calls(root: Path) -> list[Violation]:
+    """Every `print()` or `sys.stdout.write()` under `src/`.
+
+    `AGENT.md` §3 and `observability.md` §4: output is JSON on one line with a `trace_id`, and
+    a `print` is none of those. It also bypasses levels, filters and redaction — the last of
+    which is why this is a hard gate rather than a style preference.
+    """
+    violations: list[Violation] = []
+    for path in _python_files(root):
+        relative = _relative_posix(path, root)
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            is_print = isinstance(node.func, ast.Name) and node.func.id == "print"
+            is_stdio = _is_stdio_write(node) and relative not in PRE_LOGGING_BOOTSTRAP_PATHS
+            if is_print or is_stdio:
+                violations.append(
+                    Violation(
+                        path=relative,
+                        line=node.lineno,
+                        detail=(
+                            "writes to standard output directly. Use "
+                            "`video_agent.observability.get_logger(__name__)`; a print carries "
+                            "no trace_id and passes through no redaction."
+                        ),
+                    )
+                )
+    return sorted(violations, key=lambda violation: (violation.path, violation.line))
+
+
+def _logging_call_name(node: ast.Call, logging_aliases: set[str]) -> str | None:
+    func = node.func
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in logging_aliases
+        and func.attr in UNSTRUCTURED_LOGGING_CALLS
+    ):
+        return f"{func.value.id}.{func.attr}"
+    if isinstance(func, ast.Name) and func.id in logging_aliases:
+        return func.id
+    return None
+
+
+def _logging_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """Names bound to the `logging` module, and names bound to `logging.getLogger` itself."""
+    modules: set[str] = set()
+    functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "logging"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "logging":
+            functions.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name in UNSTRUCTURED_LOGGING_CALLS
+            )
+    return modules, functions
+
+
+def find_unstructured_loggers(root: Path) -> list[Violation]:
+    """Every direct use of the stdlib `logging` API outside the one module that owns it.
+
+    Matching on the *binding* rather than the spelling, so `import logging as stdlib_logging`
+    and `from logging import getLogger` are caught alongside the obvious form. The exemption
+    is a single path, not a pattern: one module configures logging, and everything else asks
+    it for a logger.
+    """
+    violations: list[Violation] = []
+    for path in _python_files(root):
+        relative = _relative_posix(path, root)
+        if relative == STRUCTURED_LOGGING_MODULE:
+            continue
+        tree = _parse(path)
+        if tree is None:
+            continue
+        modules, functions = _logging_aliases(tree)
+        if not modules and not functions:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = _logging_call_name(node, modules | functions)
+            if called is not None:
+                violations.append(
+                    Violation(
+                        path=relative,
+                        line=node.lineno,
+                        detail=(
+                            f"calls `{called}` directly. Loggers come from "
+                            f"`video_agent.observability.get_logger`, which is the only path "
+                            f"that carries trace context, redaction and the JSON format."
+                        ),
+                    )
+                )
+    return sorted(violations, key=lambda violation: (violation.path, violation.line))

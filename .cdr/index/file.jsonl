@@ -33,3 +33,19 @@
 {"path": "tests/unit/test_async_smoke.py", "module": "foundation", "features": ["pytest-harness"], "last_change_run": "2026-08-08/006-implementation"}
 {"path": "tests/contract/test_env_example_contract.py", "module": "config", "features": ["config-contract"], "last_change_run": "2026-08-08/006-implementation"}
 {"path": "tests/integration/test_dev_stack_up.py", "module": "foundation", "features": ["dev-stack"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "src/video_agent/observability/codes.py", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/codes.registry.json", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/registry.py", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/context.py", "module": "observability", "features": ["trace-context"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/logging.py", "module": "observability", "features": ["structured-logging"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/redaction.py", "module": "observability", "features": ["redaction"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/alarms.py", "module": "observability", "features": ["structured-logging", "redaction"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/errors.py", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "src/video_agent/observability/__init__.py", "module": "observability", "features": ["error-taxonomy", "structured-logging", "redaction"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_error_codes.py", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_code_registry.py", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_error_types.py", "module": "observability", "features": ["error-taxonomy"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_structured_logging.py", "module": "observability", "features": ["structured-logging"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_redaction.py", "module": "observability", "features": ["redaction"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_redaction_canary.py", "module": "observability", "features": ["redaction"], "last_change_run": "2026-08-08/008-implementation"}
+{"path": "tests/unit/test_logging_guards.py", "module": "observability", "features": ["structured-logging"], "last_change_run": "2026-08-08/008-implementation"}

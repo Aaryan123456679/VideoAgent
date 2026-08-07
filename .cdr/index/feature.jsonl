@@ -75,3 +75,4 @@
 {"feature": "tenant-table", "module": "persistence", "docs": ["docs/LLD/harness.md", "docs/LLD/persistence.md"], "subtask": "fold-open-question-resolutions", "commit": "438138573aa69c26727651b368e056262908bc69"}
 {"feature": "termination-outcomes", "module": "harness", "docs": ["docs/HLD.md", "docs/LLD/harness.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
 {"feature": "thumbnail", "module": "assembly", "docs": ["docs/LLD/assembly.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "trace-context", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "S0.3.2", "commit": null}

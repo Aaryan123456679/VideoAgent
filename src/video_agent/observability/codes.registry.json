@@ -1,0 +1,370 @@
+{
+  "schema_version": "1",
+  "note": "Append-only register of every error code ever issued [D-55]. A code is added here in the same commit that adds it to ErrorCode, and is never removed or edited. To stop using a code, set its status to 'retired'; the number is then spent and may never be reused. src/video_agent/observability/registry.py enforces all of this.",
+  "codes": [
+    {
+      "code": "VA-REQ-001",
+      "meaning": "Invalid prompt",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-REQ-002",
+      "meaning": "Idempotency key missing",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-REQ-003",
+      "meaning": "Idempotency key reused with a different body",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-REQ-004",
+      "meaning": "Duplicate request in flight",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-REQ-005",
+      "meaning": "Job not found (also returned cross-tenant)",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-REQ-006",
+      "meaning": "Job not resumable",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-REQ-007",
+      "meaning": "Request schema invalid",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-AUTH-001",
+      "meaning": "Unauthenticated",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-AUTH-002",
+      "meaning": "Tenant forbidden",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PLAN-001",
+      "meaning": "Plan unparseable",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PLAN-002",
+      "meaning": "Beats do not sum to exactly 40s",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PLAN-003",
+      "meaning": "Wrong beat count/kind/order",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-BIBLE-001",
+      "meaning": "Bible incomplete or too vague",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-BIBLE-002",
+      "meaning": "Bible mutation attempted / hash mismatch",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-001",
+      "meaning": "Provider unavailable",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-002",
+      "meaning": "No provider satisfies required capabilities",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-003",
+      "meaning": "Provider timeout",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-004",
+      "meaning": "Content policy rejection",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-005",
+      "meaning": "All providers in the group exhausted",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-006",
+      "meaning": "Prompt exceeds provider limit even after policy truncation",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-007",
+      "meaning": "Provider rejected the request (400)",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-008",
+      "meaning": "Provider credential rejected (401)",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-009",
+      "meaning": "Provider payment required (402) — credits exhausted",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-010",
+      "meaning": "Provider project not found (404)",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-011",
+      "meaning": "Provider unprocessable entity (422)",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-012",
+      "meaning": "Render reached terminal error",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-PROV-013",
+      "meaning": "Render reached terminal canceled",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-QC-001",
+      "meaning": "QC model unavailable",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-QC-002",
+      "meaning": "Score below threshold (internal signal, never an HTTP error)",
+      "retryability": "n/a",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-QC-003",
+      "meaning": "QC response unparseable",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-ASM-001",
+      "meaning": "ffmpeg failed / timed out",
+      "retryability": "yes (once)",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-ASM-002",
+      "meaning": "No usable clips to assemble",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-ASM-003",
+      "meaning": "Output duration mismatch",
+      "retryability": "yes (once)",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-ASM-004",
+      "meaning": "Disk exhausted",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-STORE-001",
+      "meaning": "Artifact write failed",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-STORE-002",
+      "meaning": "Presign failed",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-STORE-003",
+      "meaning": "Database unavailable",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-STORE-004",
+      "meaning": "Artifact checksum mismatch",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-BUDGET-001",
+      "meaning": "USD cap exhausted",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-BUDGET-002",
+      "meaning": "Wall-clock cap exhausted",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-BUDGET-003",
+      "meaning": "Token cap exhausted",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-BUDGET-004",
+      "meaning": "Iteration cap exhausted",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-GW-001",
+      "meaning": "Circuit open / alias group down",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-GW-002",
+      "meaning": "Alias unresolvable",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-GW-003",
+      "meaning": "Rate limited",
+      "retryability": "yes",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-GW-004",
+      "meaning": "Structured output unparseable",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-GW-005",
+      "meaning": "Context length exceeded",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-GW-006",
+      "meaning": "Content policy rejection at the LLM",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-SEC-001",
+      "meaning": "Instruction-shaped content quarantined",
+      "retryability": "n/a",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-INT-001",
+      "meaning": "Internal error",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-INT-002",
+      "meaning": "No progress — repeated failure signature",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    },
+    {
+      "code": "VA-INT-003",
+      "meaning": "Checkpoint schema drift",
+      "retryability": "no",
+      "status": "active",
+      "issued_in": "T0.3"
+    }
+  ]
+}

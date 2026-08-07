@@ -1,0 +1,6 @@
+{"path": "docs/LLD/observability.md", "trigger": "the error taxonomy table in S6 changes", "retest": ["tests/unit/test_error_codes.py"]}
+{"path": "src/video_agent/observability/codes.py", "trigger": "a code is added, removed or edited", "retest": ["tests/unit/test_error_codes.py", "tests/unit/test_code_registry.py"]}
+{"path": "src/video_agent/observability/codes.registry.json", "trigger": "any edit; the register is append-only [D-55]", "retest": ["tests/unit/test_code_registry.py"]}
+{"path": "src/video_agent/observability/redaction.py", "trigger": "ALLOWED_FIELDS is widened or a detector is changed", "retest": ["tests/unit/test_redaction.py", "tests/unit/test_redaction_canary.py"]}
+{"path": "src/video_agent/observability/logging.py", "trigger": "the log schema, the filters or the sampler change", "retest": ["tests/unit/test_structured_logging.py", "tests/unit/test_redaction_canary.py"]}
+{"path": "tests/static_guards.py", "trigger": "an allow-list or exemption is widened", "retest": ["tests/unit/test_static_guards.py", "tests/unit/test_logging_guards.py"]}

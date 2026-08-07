@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/008-implementation",
+  "macro": "cdr:implement",
+  "macro_version": "1",
+  "agent": "implementation",
+  "subtask": "T0.3",
+  "git_head": "e0b41d041e482d2f7fb2b6c714ab3a4f7bc07fac",
+  "run_key": "T0.3@e0b41d0+plan003+res004",
+  "status": "completed",
+  "last_completed_step": "handoff",
+  "started_at": "2026-08-08T00:00:00Z",
+  "ended_at": "2026-08-08T00:00:00Z"
+}

@@ -34,9 +34,9 @@
 {"id": "S0.2.1", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
 {"id": "S0.2.2", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
 {"id": "S0.2.3", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
-{"id": "S0.3.1", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
-{"id": "S0.3.2", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
-{"id": "S0.3.3", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
+{"id": "S0.3.1", "state": "implemented", "runs": ["2026-08-08/003-planner", "2026-08-08/008-implementation"], "commit": null, "verification": null}
+{"id": "S0.3.2", "state": "implemented", "runs": ["2026-08-08/003-planner", "2026-08-08/008-implementation"], "commit": null, "verification": null}
+{"id": "S0.3.3", "state": "implemented", "runs": ["2026-08-08/003-planner", "2026-08-08/008-implementation"], "commit": null, "verification": null}
 {"id": "S0.4.1", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
 {"id": "S0.4.2", "state": "blocked", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
 {"id": "S0.4.3", "state": "planned", "runs": ["2026-08-08/003-planner"], "commit": null, "verification": null}
