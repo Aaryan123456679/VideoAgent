@@ -1,41 +1,89 @@
-"""`main()` claims it never raises. This is the file that makes that true.
+"""`main()` claims it never raises, and claims a boundary about *where* failures are reported.
 
-The preflight steps raise more than the two exception types `main()` originally caught:
-`subprocess.TimeoutExpired` from a hung ffmpeg and `OSError` from one that cannot be
-executed both escaped as full tracebacks. The S0.1.4 test spec asks for a clear error rather
-than a traceback leak, and an operator staring at a stack frame has been told nothing.
+The first claim was `S0.1.4`'s: the preflight steps raise more than the two exception types
+`main()` originally caught — `subprocess.TimeoutExpired` from a hung ffmpeg and `OSError` from
+one that cannot be executed both escaped as full tracebacks. An operator staring at a stack
+frame has been told nothing.
+
+The second claim arrives with `T0.4`. `configure_logging` takes a `Settings`, so there is a
+window at the start of the process where no structured logger can exist, and exactly two
+assertions run inside it: the media-toolchain pin and configuration loading. Those report to
+`stderr`, which is why `tests/static_guards.py` exempts this one file by exact path. Everything
+after `configure_logging` reports through the logger. The tests below pin that boundary from
+both sides, because an exemption that quietly widens is how "one file writes to stderr" becomes
+"the codebase writes to stderr".
 """
 
 from __future__ import annotations
 
+import inspect
+import json
+from typing import TYPE_CHECKING, Any, Final
+
 import pytest
 
+from tests.unit.test_app_shell import captured_logs
 from video_agent import __main__ as entrypoint
+from video_agent.config.settings import get_settings
+from video_agent.observability.codes import ErrorCode
 
-PLANTED = "planted-failure-detail"
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from video_agent.config.settings import Settings
+
+PLANTED: Final = "planted-failure-detail"
+
+
+def _settings() -> Settings:
+    return get_settings()
+
+
+def unstructured_lines(stderr: str) -> list[str]:
+    """Lines on `stderr` that are not JSON.
+
+    This is the assertion that matters, and it is not "nothing reaches stderr": the configured
+    handler writes there too, as one JSON object per line. What must not appear after
+    `configure_logging` is a *bare sentence* — a `sys.stderr.write` that no aggregator can
+    parse and that carries neither a code nor a trace id.
+    """
+    offenders: list[str] = []
+    for line in stderr.splitlines():
+        if not line.strip():
+            continue
+        try:
+            json.loads(line)
+        except json.JSONDecodeError:
+            offenders.append(line)
+    return offenders
 
 
 def test_returns_zero_when_preflight_passes(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(entrypoint, "preflight", lambda: None)
+    """The success path reports through the logger, not through `stderr` directly."""
+    monkeypatch.setattr(entrypoint, "preflight", _settings)
+    monkeypatch.setattr(entrypoint, "post_logging_preflight", lambda: None)
 
-    assert entrypoint.main() == entrypoint.EXIT_OK
-    assert "startup preflight passed" in capsys.readouterr().err
+    with captured_logs() as lines:
+        exit_code = entrypoint.main()
+
+    assert exit_code == entrypoint.EXIT_OK
+    assert unstructured_lines(capsys.readouterr().err) == []
+    assert any(line.get("event") == "startup_preflight_passed" for line in lines)
 
 
 def test_a_runtime_error_is_rendered_as_a_sentence(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def boom() -> None:
+    """A pre-logging failure is a plain sentence on `stderr`, never a traceback."""
+
+    def boom() -> Settings:
         raise RuntimeError(PLANTED)
 
     monkeypatch.setattr(entrypoint, "preflight", boom)
 
     assert entrypoint.main() == entrypoint.EXIT_PRECONDITION_FAILED
     stderr = capsys.readouterr().err
-    assert "startup preflight failed" in stderr
-    assert PLANTED in stderr
+    assert f"startup preflight failed: {PLANTED}" in unstructured_lines(stderr)
     assert "Traceback" not in stderr
 
 
@@ -60,7 +108,7 @@ def test_no_exception_type_escapes_main(
     traceback with a non-zero exit that said nothing about why.
     """
 
-    def boom() -> None:
+    def boom() -> Settings:
         raise exception
 
     monkeypatch.setattr(entrypoint, "preflight", boom)
@@ -80,10 +128,120 @@ def test_a_keyboard_interrupt_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) 
     as a precondition failure, and would swallow `SystemExit`.
     """
 
-    def boom() -> None:
+    def boom() -> Settings:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(entrypoint, "preflight", boom)
 
     with pytest.raises(KeyboardInterrupt):
         entrypoint.main()
+
+
+# --- The pre-logging boundary ----------------------------------------------------------------
+
+
+def test_logging_is_configured_immediately_after_settings_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`configure_logging` runs between the two preflight phases, in that order.
+
+    `T0.3` built the logging substrate and nothing called it. Until this line existed, a
+    production process wrote whatever the stdlib's default configuration produced —
+    unstructured, untraceable and, most importantly, **unredacted**.
+    """
+    order: list[str] = []
+
+    def record_preflight() -> Settings:
+        order.append("preflight")
+        return get_settings()
+
+    def record_configure(_configured: Settings) -> None:
+        order.append("configure_logging")
+
+    def record_post() -> None:
+        order.append("post_logging_preflight")
+
+    monkeypatch.setattr(entrypoint, "preflight", record_preflight)
+    monkeypatch.setattr(entrypoint, "configure_logging", record_configure)
+    monkeypatch.setattr(entrypoint, "post_logging_preflight", record_post)
+
+    assert entrypoint.main() == entrypoint.EXIT_OK
+    assert order == ["preflight", "configure_logging", "post_logging_preflight"]
+
+
+def test_a_post_logging_failure_goes_to_the_logger_not_to_stderr(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Once logging exists, `stderr` is no longer the reporting channel.
+
+    The alias table is validated after `configure_logging` precisely so its failure is a
+    structured, coded, traceable line rather than a sentence nothing can parse.
+    """
+    monkeypatch.setattr(entrypoint, "preflight", _settings)
+
+    def boom() -> None:
+        raise RuntimeError(PLANTED)
+
+    monkeypatch.setattr(entrypoint, "post_logging_preflight", boom)
+
+    with captured_logs() as lines:
+        exit_code = entrypoint.main()
+
+    assert exit_code == entrypoint.EXIT_PRECONDITION_FAILED
+    assert unstructured_lines(capsys.readouterr().err) == []
+
+    failures = [line for line in lines if line.get("event") == "startup_preflight_failed"]
+    assert failures
+    assert failures[0]["code"] == ErrorCode.VA_GW_002.value
+    assert PLANTED in failures[0]["reason"]
+    assert failures[0]["exc_type"] == "RuntimeError"
+
+
+def test_the_pre_logging_phase_holds_only_the_two_assertions_that_need_it() -> None:
+    """`preflight` may not grow: everything it contains is exempt from the `stderr` ban.
+
+    The exemption in `tests/static_guards.py` names this module by exact path and exists for
+    the media-toolchain pin, which must hold when configuration is unreadable. A third
+    assertion added to `preflight` would silently inherit an exemption written for two.
+    """
+    source = inspect.getsource(entrypoint.preflight)
+
+    assert "assert_media_toolchain()" in source
+    assert "get_settings()" in source
+    assert "get_alias_table" not in source
+
+
+def test_the_alias_table_is_validated_after_logging_exists() -> None:
+    """The other half of the boundary: the third assertion is on the logged side of it."""
+    source = inspect.getsource(entrypoint.post_logging_preflight)
+
+    assert "get_alias_table()" in source
+
+
+def test_the_module_docstring_describes_the_logging_that_now_exists() -> None:
+    """The docstring claimed structured logging did not exist yet. It does.
+
+    A comment that has become false is worse than no comment: the next person reads it as a
+    reason not to look.
+    """
+    docstring = entrypoint.__doc__ or ""
+
+    assert "does not exist yet" not in docstring
+    assert "configure_logging" in docstring
+
+
+def test_the_startup_log_line_carries_no_credentials() -> None:
+    """The startup path handles `Settings`, which is where every credential lives."""
+    with captured_logs() as lines:
+        entrypoint.main()
+
+    serialised = json.dumps(lines)
+    for marker in ("MAGICHOUR_API_KEY=", "postgresql+asyncpg://", "SecretStr"):
+        assert marker not in serialised
+
+
+def test_main_returns_an_int_and_never_none() -> None:
+    """`SystemExit(None)` is a zero exit, so a missing return would report success."""
+    result: Any = entrypoint.main()
+
+    assert isinstance(result, int)
