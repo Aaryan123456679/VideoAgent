@@ -1,0 +1,5 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"impact-analysis","type":"object",
+"required":["schema_version","modules","files","risk_level"],
+"properties":{"schema_version":{"const":"1.0"},"modules":{"type":"array","items":{"type":"string"}},
+"files":{"type":"array","items":{"type":"string"}},"contracts":{"type":"array"},"dependents":{"type":"array"},
+"risk_level":{"enum":["low","medium","high"]}}}

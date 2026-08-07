@@ -1,0 +1,8 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"verification","type":"object",
+"required":["schema_version","verdict","findings"],
+"properties":{"schema_version":{"const":"1.0"},
+"verdict":{"enum":["PASS","PASS_WITH_COMMENTS","CHANGES_REQUESTED","FAIL"]},
+"confidence":{"type":"number"},"findings":{"type":"array","items":{"type":"object",
+"required":["dimension","severity","note"],
+"properties":{"dimension":{"enum":["requirements","architecture","regression","edge_cases","security","performance","maintainability","test_coverage","confidence","improvements"]},
+"severity":{"enum":["info","minor","major","blocker"]},"note":{"type":"string"}}}}}}

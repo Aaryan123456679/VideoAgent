@@ -1,0 +1,5 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"cdr.config","type":"object",
+"required":["schema_version","runtime"],
+"properties":{"schema_version":{"const":"1.0"},"runtime":{"type":"string"},
+"macros":{"type":"object"},"retention":{"type":"object"},"github":{"type":"object"},
+"overrides":{"type":"array"}}}

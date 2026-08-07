@@ -1,0 +1,5 @@
+{"feature":{"feature":"string","module":"string","docs":["string"],"subtask":"string","commit":"string"},
+"decision":{"id":"string","decision":"string","rationale":"string","run_id":"string","supersedes":"string|null"},
+"file":{"path":"string","module":"string","features":["string"],"last_change_run":"string"},
+"regression":{"path":"string","trigger":"string","retest_route":"string","run_id":"string"},
+"task":{"id":"string","state":"string","runs":["string"],"commit":"string|null","verification":"string|null"}}

@@ -1,0 +1,5 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"commit.record","type":"object",
+"required":["schema_version","summary","verification"],
+"properties":{"schema_version":{"const":"1.0"},"summary":{"type":"string"},
+"features":{"type":"array"},"impact":{"type":"string"},
+"verification":{"type":"object","required":["verdict","run_id"]},"release_notes":{"type":"string"}}}

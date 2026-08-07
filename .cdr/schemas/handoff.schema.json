@@ -1,0 +1,5 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"handoff","type":"object",
+"required":["from_agent","to_agent","run_id","context_pointers"],
+"properties":{"from_agent":{"type":"string"},"to_agent":{"type":"string"},"run_id":{"type":"string"},
+"subtask":{"type":["string","null"]},"context_pointers":{"type":"object"},
+"exclusions":{"type":"array","items":{"type":"string"}}}}
