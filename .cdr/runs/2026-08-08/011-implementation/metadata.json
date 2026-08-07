@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/011-implementation",
+  "macro": "implement",
+  "macro_version": "1",
+  "agent": "implementation",
+  "subtask": "T0.5",
+  "git_head": "bf19f978c8e8a500e679c6b7f811bc31d9d73e66",
+  "run_key": "implement:1:T0.5:bf19f978c8e8a500e679c6b7f811bc31d9d73e66",
+  "status": "completed",
+  "last_completed_step": "self-consistency",
+  "started_at": "2026-08-08T00:00:00Z",
+  "ended_at": "2026-08-08T00:00:00Z"
+}

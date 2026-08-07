@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/011-implementation",
+  "task": "T0.5",
+  "subtasks": [
+    "S0.5.1",
+    "S0.5.2",
+    "S0.5.3",
+    "S0.5.4",
+    "S0.5.5",
+    "S0.5.6",
+    "S0.5.7",
+    "S0.5.8"
+  ],
+  "artifacts": {
+    "schema_single_source_of_truth": "src/video_agent/persistence/schema.py",
+    "enum_types": "src/video_agent/persistence/enums.py",
+    "rls_policy_exemptions_and_audit": "src/video_agent/persistence/rls.py",
+    "ddl_compilation_trigger_and_grants": "src/video_agent/persistence/ddl.py",
+    "expand_contract_lint": "src/video_agent/persistence/migration_lint.py",
+    "engine_and_tenant_scope": "src/video_agent/persistence/session.py",
+    "repositories": "src/video_agent/persistence/repositories.py",
+    "alembic_config": "alembic.ini",
+    "alembic_env_offline_and_async": "migrations/env.py",
+    "revision_template_with_phase_field": "migrations/script.py.mako",
+    "revisions": "migrations/versions/0001..0006",
+    "tests_offline": [
+      "tests/unit/test_schema_definition.py",
+      "tests/unit/test_rls_policy.py",
+      "tests/unit/test_migration_lint.py",
+      "tests/unit/test_migration_sql.py",
+      "tests/unit/test_persistence_repositories.py",
+      "tests/unit/test_persistence_boundary.py"
+    ],
+    "tests_requiring_postgres": "tests/integration/test_persistence_postgres.py"
+  },
+  "public_interface_for_downstream": {
+    "engine": "video_agent.persistence.create_database_engine(settings)",
+    "transaction": "video_agent.persistence.tenant_session(engine, tenant_id) -> TenantSession",
+    "repositories": "JobRepository, StoryPlanRepository, ContinuityBibleRepository, ShotRepository, ShotAttemptRepository, ArtifactRepository, CheckpointRepository",
+    "rls_session_variable": "app.tenant_id, set only from Principal.tenant_id"
+  },
+  "blocking_findings": [
+    {
+      "id": "F1",
+      "severity": "high",
+      "detail": "src/video_agent/api/clients.py and src/video_agent/api/database.py (owned by T0.4) build their own AsyncEngine and their own tenant-scoped transaction, duplicating video_agent.persistence.session. Recorded as an asserted, self-expiring exemption in tests/unit/test_persistence_boundary.py::PENDING_CONSOLIDATION. Consolidation onto video_agent.persistence is required before merge."
+    },
+    {
+      "id": "F2",
+      "severity": "medium",
+      "detail": "docs/LLD/persistence.md section 3 prints USING (tenant_id = current_setting('app.tenant_id')::uuid). The one-argument form RAISES when the setting is absent, which contradicts section 9 of the same document ('zero rows, not an error, plus an alarm') and S0.5.7 acceptance 3. Implemented as NULLIF(current_setting('app.tenant_id', true), '')::uuid. The doc needs amending."
+    },
+    {
+      "id": "F3",
+      "severity": "medium",
+      "detail": "migrations/ is outside the mypy `files` list and outside the Makefile SRC variable, so revision modules are neither type-checked nor linted. pyproject.toml and Makefile were out of scope for this run."
+    }
+  ],
+  "unverified": "Every assertion in tests/integration/test_persistence_postgres.py. No PostgreSQL was reachable (localhost:5432 connection refused); 48 tests skipped cleanly in 0.93s."
+}
