@@ -1,0 +1,62 @@
+{
+  "from_agent": "implementation",
+  "to_agent": "verification",
+  "run_id": "2026-08-08/007-implementation",
+  "subtask": "T0.2",
+  "context_pointers": {
+    "plan_section": ".cdr/runs/2026-08-08/003-planner/PLAN.md#L361-L438",
+    "batching_note": "Implemented at Task granularity (S0.2.1-S0.2.3 in one run) at the caller's instruction; the usual one-subtask rule was waived for schedule.",
+    "resolutions": ".cdr/runs/2026-08-08/004-resolutions/RESOLUTIONS.md#L20-L33 (D-65), #L83-L111 (D-70), #L113-L129 (D-71)",
+    "lld": {
+      "alias_table": "docs/LLD/gateway.md#L86-L116",
+      "static_checks": "docs/LLD/gateway.md#L232, docs/LLD/providers.md#L455",
+      "model_enum": "docs/LLD/providers.md#L309-L311",
+      "budget_caps": "docs/LLD/harness.md#L171-L196"
+    },
+    "created": {
+      "settings": "src/video_agent/config/settings.py",
+      "aliases_loader": "src/video_agent/config/aliases.py",
+      "errors": "src/video_agent/config/errors.py",
+      "alias_table": "config/aliases.yaml",
+      "static_guards": "tests/static_guards.py",
+      "tests": [
+        "tests/unit/test_settings.py",
+        "tests/unit/test_alias_table.py",
+        "tests/unit/test_static_guards.py"
+      ]
+    },
+    "modified": {
+      "package_exports": "src/video_agent/config/__init__.py",
+      "alias_reexport": "src/video_agent/gateway/__init__.py",
+      "preflight": "src/video_agent/__main__.py",
+      "contract_test": "tests/contract/test_env_example_contract.py",
+      "pyproject": "pyproject.toml",
+      "lock": "uv.lock",
+      "ci": ".github/workflows/ci.yml"
+    },
+    "self_consistency": {
+      "make lint": 0,
+      "make type": 0,
+      "make test": "0 (135 passed, 2 deselected)",
+      "make check": 0,
+      "uv lock --check": 0,
+      "uv build --wheel": "0, config/aliases.yaml present in the wheel at video_agent/config/aliases.yaml",
+      "pre-commit run --all-files": "ruff/mypy hooks passed; end-of-file-fixer rewrote two PRE-EXISTING files from earlier CDR runs (.cdr/runs/2026-08-08/002-planner/metadata.json, 003-planner/PLAN.md). Both were reverted and are NOT part of this commit."
+    },
+    "findings_for_verifier": [
+      "QC_MAX_REPAIR_ATTEMPTS is `int = Field(ge=2, le=2)`, not `Literal[2]`. Literal[int] does not coerce the string an environment variable actually delivers, so `QC_MAX_REPAIR_ATTEMPTS=2` from .env was itself rejected. The constraint is still exactly 2.",
+      "Three fields are required (no default) despite .env.example supplying a value for two of them: MAGICHOUR_API_KEY, DATABASE_URL, REDIS_URL. The plan's own test spec demands this. It means .env.example defaults and Settings defaults deliberately diverge for the two URLs; tests/unit/test_settings.py::test_required_fields_are_exactly_the_three_that_cannot_be_guessed pins the divergence and states why.",
+      "Required means PRESENT, not NON-EMPTY. MAGICHOUR_API_KEY= satisfies the field; require_magichour_api_key() raises MissingCredentialError at point of use. The app starts with the key empty, as instructed.",
+      "AWS_ACCESS_KEY_ID is typed SecretStr although the acceptance criteria do not name it. It is half a credential pair and credential-shaped. LANGFUSE_PUBLIC_KEY is deliberately a plain str.",
+      "AliasConfigError carries VA-GW-002 for every alias-table load failure, not only for a missing alias. gateway.md S8 defines that code for 'alias not in config'; a table that will not load resolves no alias, so it is the same condition reached earlier. No other code in observability.md S6 fits. MissingCredentialError deliberately carries NO code: inventing one would corrupt the historical registry T0.3 introduces.",
+      "The alias-only static guard bans all 16 Magic Hour model names, but 'default' (also an ordinary English word) is matched ONLY as the exact full value of a string literal, while the other 15 and every vendor name are matched in raw file text including comments. See tests/static_guards.py AMBIGUOUS_MODEL_NAMES. The consequence is that a bare `\"default\"` literal anywhere in src/ now fails CI.",
+      "The inline-prompt guard exempts every string that is a bare expression statement (docstrings and PEP 257 attribute docstrings), not only the first statement of a body. Without that it flagged src/video_agent/config/errors.py's own attribute docstring.",
+      "pyproject.toml gained `plugins = [\"pydantic.mypy\"]`. Without it, mypy synthesises Settings.__init__ from the field declarations via dataclass_transform and reports every required variable as a missing argument at `Settings()`, and rejects the documented `_env_file=None`. The alternative was inline `# type: ignore[call-arg]`, which the quality bar forbids. This is not a relaxation: no ruff ignore, no per-file-ignores, no mypy overrides, no noqa were added.",
+      "pyyaml moved from the dev dependency group into project.dependencies. The alias table is parsed at startup, so it is a runtime dependency. No new package entered the lock file.",
+      ".github/workflows/ci.yml now runs `cp .env.example .env` before `make test`. The preflight validates configuration, so tests/unit/test_media_toolchain.py::test_entrypoint_exits_zero_when_the_pin_matches needs a .env in CI. Verified: the committed template alone constructs Settings successfully.",
+      "config/aliases.yaml is located by walking up from the loader module and then from the cwd. pyproject force-includes it into the wheel at video_agent/config/aliases.yaml so both a checkout and an installed wheel resolve. A Dockerfile task must still ensure the file reaches the image.",
+      "The shipped alias table declares NO canary. Sending 10% of traffic to an unproven model is a decision with a cost and is not made by leaving an example uncommented. Canary parsing and bounds are covered by fixture tests.",
+      "Prices in config/aliases.yaml are list rates transcribed when the file was written and are not reconciled against any vendor price page. The golden snapshot in tests/unit/test_alias_table.py makes a change loud, not correct."
+    ]
+  }
+}

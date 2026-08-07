@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------------------------------
+# Alias table — the ONLY file in this repository where a concrete model name may appear.
+#
+# Application code names a logical alias (`reasoning-high`, `vision-default`, ...); the
+# gateway resolves it to a model at call time. Swapping a model is therefore an edit to this
+# file and nothing else: zero code diff. [CPS Model routing] [AGENT.md 2]
+#
+# The alias set is FIXED at these five. Adding one is a specification change, not a config
+# change. `realtime-voice` and `embed-default` have no consumer in v1 [D-13]; they are
+# declared because the set is fixed, and the loader must accept them unconsumed.
+#
+# Each alias group is a FAILOVER UNIT. Fallback goes to another model in the same group and
+# never across groups [CPS Failure behaviour] — a vision failure falling back to a
+# text-only model would answer a question about an image without seeing it.
+#
+# Prices are USD per 1,000 tokens, undiscounted list rates. `tests/unit/test_alias_table.py`
+# holds a golden snapshot of them, so a silent edit fails CI rather than quietly changing
+# what every budget cap in the system means. They are list prices captured when this file
+# was written and are not automatically reconciled against a vendor price page; treat a
+# vendor price change as a config change that needs the golden snapshot updated with it.
+# ---------------------------------------------------------------------------------------
+version: 1
+
+aliases:
+  # Story planning and bible locking: the calls where a weak model costs the whole run.
+  reasoning-high:
+    primary: { model: "gemini/gemini-2.5-pro", weight: 100 }
+    fallbacks:
+      - { model: "openai/gpt-4o" }
+      - { model: "anthropic/claude-sonnet-4-20250514" }
+    required_capabilities: ["structured_output"]
+    # A canary is optional and at most one per group. Shape, for when one is introduced:
+    #   canary: { model: "<vendor>/<model-next>", traffic_pct: 10 }
+    # Nothing is on canary today: sending 10% of traffic to an unproven model is a decision
+    # with a cost, and it is not made by leaving an example uncommented.
+
+  # High-volume, latency-sensitive calls where the task is mechanical.
+  reasoning-fast:
+    primary: { model: "gemini/gemini-2.5-flash", weight: 100 }
+    fallbacks:
+      - { model: "gemini/gemini-2.5-flash-lite" }
+      - { model: "openai/gpt-4o-mini" }
+    required_capabilities: ["structured_output"]
+
+  # QC scoring of rendered frames. `image_input` is not waivable: a scorer that cannot see
+  # the frame would return a confident number about nothing.
+  vision-default:
+    primary: { model: "gemini/gemini-2.5-pro", weight: 100 }
+    fallbacks:
+      - { model: "openai/gpt-4o" }
+    required_capabilities: ["image_input", "structured_output"]
+
+  # No consumer in v1 [D-13]. Declared, priced, and deliberately not built for.
+  realtime-voice:
+    primary: { model: "openai/gpt-4o-realtime-preview", weight: 100 }
+    required_capabilities: ["audio_input", "audio_output"]
+
+  # No consumer in v1 [D-13].
+  embed-default:
+    primary: { model: "openai/text-embedding-3-small", weight: 100 }
+    required_capabilities: ["embeddings"]
+
+prices:
+  gemini/gemini-2.5-pro:
+    input_usd_per_1k_tokens: "0.00125"
+    output_usd_per_1k_tokens: "0.01000"
+  gemini/gemini-2.5-flash:
+    input_usd_per_1k_tokens: "0.00030"
+    output_usd_per_1k_tokens: "0.00250"
+  gemini/gemini-2.5-flash-lite:
+    input_usd_per_1k_tokens: "0.00010"
+    output_usd_per_1k_tokens: "0.00040"
+  openai/gpt-4o:
+    input_usd_per_1k_tokens: "0.00250"
+    output_usd_per_1k_tokens: "0.01000"
+  openai/gpt-4o-mini:
+    input_usd_per_1k_tokens: "0.00015"
+    output_usd_per_1k_tokens: "0.00060"
+  openai/gpt-4o-realtime-preview:
+    input_usd_per_1k_tokens: "0.00500"
+    output_usd_per_1k_tokens: "0.02000"
+  openai/text-embedding-3-small:
+    input_usd_per_1k_tokens: "0.00002"
+    output_usd_per_1k_tokens: "0.00000"
+  anthropic/claude-sonnet-4-20250514:
+    input_usd_per_1k_tokens: "0.00300"
+    output_usd_per_1k_tokens: "0.01500"
+
+# What an unknown model costs. Every model referenced above is priced explicitly and the
+# loader refuses to start otherwise, so this is reached only if a model appears at runtime
+# that the config has never seen. It is deliberately expensive: an unpriced model that
+# costed at zero would look free to the USD cap, and a cap that can be evaded by a rename is
+# not a cap [D-21]. Set above the most expensive priced model in the table.
+unpriced_ceiling:
+  input_usd_per_1k_tokens: "0.05000"
+  output_usd_per_1k_tokens: "0.15000"

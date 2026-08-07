@@ -26,6 +26,10 @@ dependencies = [
     "langgraph>=0.2.50,<1.0",
     "langfuse>=2.53,<4.0",
     "boto3>=1.35,<2.0",
+    # config/aliases.yaml is parsed at startup, so YAML is a runtime dependency and not a
+    # development one. It was already in the lock file as a dev tool; this moves it into the
+    # application's own closure rather than adding a new package.
+    "pyyaml>=6.0,<7.0",
 ]
 
 [project.scripts]
@@ -38,13 +42,19 @@ dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<2.0",
     "pytest-cov>=6.0,<8.0",
-    "pyyaml>=6.0,<7.0",
     "ruff>=0.8,<1.0",
     "types-pyyaml>=6.0,<7.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/video_agent"]
+
+# The alias table is runtime data, not documentation: the process refuses to start without it.
+# It lives at config/aliases.yaml because that is the path the LLDs and the static guard's
+# allow-list name, and it is copied into the package so an installed wheel is self-contained.
+# The loader walks upward from its own module and then from the cwd, so it finds either copy.
+[tool.hatch.build.targets.wheel.force-include]
+"config/aliases.yaml" = "video_agent/config/aliases.yaml"
 
 # ---------------------------------------------------------------------------
 # Lint + format (ruff). S0.1.2: zero baseline suppressions. `lint.ignore` and
@@ -125,6 +135,12 @@ ban-relative-imports = "all"
 [tool.mypy]
 python_version = "3.12"
 files = ["src", "tests"]
+# Pydantic's own plugin, not a relaxation. Without it mypy synthesises `Settings.__init__`
+# from the field declarations via `dataclass_transform` and then reports every required
+# variable as a missing argument at `Settings()` — which is exactly how a settings object is
+# meant to be constructed, since the values come from the environment. The plugin is what
+# teaches mypy that, and it tightens the checking of every other model at the same time.
+plugins = ["pydantic.mypy"]
 strict = true
 disallow_any_generics = true
 warn_unused_ignores = true

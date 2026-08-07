@@ -50,5 +50,11 @@ jobs:
         run: uv sync --frozen
       - name: Assert the Python floor
         run: uv run python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
+      # The startup preflight validates configuration, so the entrypoint test needs a .env.
+      # Copying the template rather than writing one asserts something worth asserting: the
+      # committed template is by itself sufficient to boot the process. Every credential in it
+      # is blank, so nothing here is a secret.
+      - name: Materialise .env from the committed template
+        run: cp .env.example .env
       - name: Test
         run: make test
