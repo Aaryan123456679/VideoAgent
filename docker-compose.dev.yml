@@ -19,8 +19,14 @@ services:
     environment:
       POSTGRES_USER: videoagent
       POSTGRES_DB: videoagent
-      # Local-only development database. Matches the DATABASE_URL default in .env.example.
-      POSTGRES_PASSWORD: videoagent
+      # No password literal, and no `${POSTGRES_PASSWORD}` reference either: `.env.example`
+      # bundles the credential inside DATABASE_URL, so there is no discrete variable to
+      # reference and inventing one would break the Settings contract test. `trust` is the
+      # postgres image's own documented way to omit POSTGRES_PASSWORD. It accepts whatever
+      # password DATABASE_URL carries, so the default connection string works unchanged, and
+      # it removes the credential rather than relocating it. Local dev stack only — the
+      # deployed database is not built from this file.
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     volumes:

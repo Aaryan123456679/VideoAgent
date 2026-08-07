@@ -5,18 +5,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
 
+from tests.support import BANNED_SECRET_PREFIXES, SECRET_SUFFIXES
+
 EXPECTED_SERVICES = frozenset({"postgres", "redis", "minio", "litellm"})
-BANNED_SECRET_PREFIXES = ("mhk_live_", "sk-")
 VARIABLE_REFERENCE = re.compile(r"^\$\{[A-Z0-9_]+(:?-[^}]*)?\}$")
 
-# Host ports the `.env.example` defaults imply.
-POSTGRES_PORT = 5432
-REDIS_PORT = 6379
-LITELLM_PORT = 4000
 MINIO_PORT = 9000
 
 
@@ -51,25 +49,66 @@ def test_every_service_has_a_healthcheck(compose: dict[str, Any]) -> None:
         assert "healthcheck" in service, f"{name} has no healthcheck"
 
 
-def test_compose_urls_match_env_example(
+def test_compose_postgres_matches_the_database_url(
     compose: dict[str, Any], env_example: dict[str, str]
 ) -> None:
-    services: dict[str, Any] = compose["services"]
+    """Compare the *parsed* URL against the service, component by component.
 
-    database_url = env_example["DATABASE_URL"]
-    assert database_url.endswith("@localhost:5432/videoagent")
-    postgres_env = services["postgres"]["environment"]
-    assert postgres_env["POSTGRES_USER"] in database_url
-    assert postgres_env["POSTGRES_DB"] == database_url.rsplit("/", 1)[-1]
-    assert POSTGRES_PORT in _published_ports(services["postgres"])
+    The previous version asserted a suffix, a substring and a port, so mutating
+    `POSTGRES_USER` to any value that stayed a substring of the URL — or mutating the
+    password to something the URL does not contain — left the suite green. A correspondence
+    test that passes when the correspondence is broken is not a test.
+    """
+    url = urlsplit(env_example["DATABASE_URL"])
+    service = compose["services"]["postgres"]
+    environment = service["environment"]
 
-    redis_url = env_example["REDIS_URL"]
-    assert redis_url == "redis://localhost:6379/0"
-    assert REDIS_PORT in _published_ports(services["redis"])
+    assert environment["POSTGRES_USER"] == url.username
+    assert environment["POSTGRES_DB"] == url.path.lstrip("/")
+    assert url.hostname == "localhost"
+    assert url.port in _published_ports(service)
 
-    litellm_base_url = env_example["LITELLM_BASE_URL"]
-    assert litellm_base_url == "http://localhost:4000"
-    assert LITELLM_PORT in _published_ports(services["litellm"])
+    # The credential is not in the compose file at all: `.env.example` bundles it inside
+    # DATABASE_URL, so there is no discrete variable to reference. `trust` accepts whatever
+    # password the URL carries, which keeps the default connection string working while
+    # leaving nothing credential-shaped committed. If this ever becomes a literal password
+    # again, both halves of this assertion fail.
+    assert "POSTGRES_PASSWORD" not in environment
+    assert environment["POSTGRES_HOST_AUTH_METHOD"] == "trust"
+    assert url.password, "DATABASE_URL must still carry a password for a non-trust deployment"
+
+
+def test_compose_redis_matches_the_redis_url(
+    compose: dict[str, Any], env_example: dict[str, str]
+) -> None:
+    url = urlsplit(env_example["REDIS_URL"])
+    service = compose["services"]["redis"]
+
+    assert url.scheme == "redis"
+    assert url.hostname == "localhost"
+    assert url.port in _published_ports(service)
+
+    # `redis-server --databases N` must cover the database index the URL selects, or every
+    # connection made with the documented default is rejected at runtime.
+    database_index = int(url.path.lstrip("/") or "0")
+    command: list[str] = service["command"]
+    declared_databases = int(command[command.index("--databases") + 1])
+    assert database_index < declared_databases
+
+
+def test_compose_litellm_matches_the_base_url(
+    compose: dict[str, Any], env_example: dict[str, str]
+) -> None:
+    url = urlsplit(env_example["LITELLM_BASE_URL"])
+    service = compose["services"]["litellm"]
+
+    assert url.scheme == "http"
+    assert url.hostname == "localhost"
+    assert url.port in _published_ports(service)
+
+    # The proxy is told the same port the URL advertises, not merely mapped to it.
+    command: list[str] = service["command"]
+    assert int(command[command.index("--port") + 1]) == url.port
 
 
 def test_artifact_endpoint_url_default_is_blank_in_the_contract(
@@ -89,12 +128,16 @@ def test_compose_contains_no_literal_secrets(compose: dict[str, Any], compose_te
     for prefix in BANNED_SECRET_PREFIXES:
         assert prefix not in compose_text, f"compose file contains a literal {prefix}... value"
 
+    checked = 0
     for name, service in compose["services"].items():
         for key, value in service.get("environment", {}).items():
-            if key.endswith(("_KEY", "_KEY_ID", "_TOKEN", "_SECRET")):
+            if key.endswith(SECRET_SUFFIXES):
+                checked += 1
                 assert VARIABLE_REFERENCE.match(str(value)), (
                     f"{name}.{key} must be a ${{VAR}} reference, not a literal"
                 )
+    # A deny-list that matches nothing passes vacuously. Assert it has teeth.
+    assert checked > 0, "no credential-suffixed variable was checked; the suffix list is stale"
 
 
 def test_compose_references_only_env_example_variable_names(

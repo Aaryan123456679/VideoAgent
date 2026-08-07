@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 REQUIRES_PYTHON = ">=3.12,<3.13"
 SUBPROCESS_TIMEOUT = 120
@@ -97,3 +98,24 @@ def test_pre_commit_config_covers_the_same_gates(repo_root: Path) -> None:
     assert "ruff-check" in text
     assert "ruff-format" in text
     assert "mypy" in text
+
+
+def test_pre_commit_pins_the_same_ruff_the_venv_runs(repo_root: Path) -> None:
+    """Two ruff versions gating one tree is how a lint failure reaches CI green.
+
+    The hook pinned 0.14.6 while `make lint` and CI ran 0.16.2, so `ruff format` and
+    `ruff check` could legitimately disagree with themselves depending on which gate fired.
+    """
+    ruff = shutil.which("ruff")
+    if ruff is None:
+        pytest.skip("ruff is not on PATH; run inside the project venv")
+
+    installed = _run([ruff, "--version"], cwd=repo_root).stdout.split()[1]
+
+    config = yaml.safe_load((repo_root / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooked = next(
+        repo["rev"] for repo in config["repos"] if "ruff-pre-commit" in str(repo.get("repo", ""))
+    )
+    assert hooked.lstrip("v") == installed, (
+        f"pre-commit pins ruff {hooked} but the venv runs {installed}"
+    )

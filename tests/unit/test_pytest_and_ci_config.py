@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 import yaml
 
-GATED_JOBS = ("lint", "type", "test")
+GATED_JOBS = ("lint", "type", "test", "pre-commit")
 SUBPROCESS_TIMEOUT = 180
 FIXTURE_MODULE = Path("tests") / "_fixtures" / "integration_marker_case.py"
 
@@ -134,3 +134,14 @@ def test_ci_workflow_gates_three_jobs(repo_root: Path) -> None:
     assert "make lint" in raw
     assert "make type" in raw
     assert "make test" in raw
+
+
+def test_ci_runs_pre_commit_over_the_whole_tree(repo_root: Path) -> None:
+    """S0.1.2 AC4 is a gate, so something has to gate it.
+
+    `make lint` runs ruff and mypy; the hook set also runs end-of-file-fixer,
+    mixed-line-ending and detect-private-key. With pre-commit absent from CI those hooks
+    were failing on committed files with nothing to catch it.
+    """
+    raw = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "pre-commit run --all-files" in raw

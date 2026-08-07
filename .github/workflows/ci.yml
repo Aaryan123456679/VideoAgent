@@ -25,6 +25,23 @@ jobs:
       - name: Lint
         run: make lint
 
+  # `make lint` and the pre-commit hooks are two gate sets over one tree, and they had
+  # already diverged: hooks that `make lint` does not run (end-of-file-fixer,
+  # mixed-line-ending, detect-private-key) were failing on committed files with nothing in
+  # CI to notice. S0.1.2 AC4 requires this to exit 0, so CI must be the thing that says so.
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run every hook over the whole tree
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
   type:
     name: type
     runs-on: ubuntu-latest

@@ -10,11 +10,15 @@ from pathlib import Path
 
 import pytest
 
+from video_agent.assembly import media_toolchain
 from video_agent.assembly.media_toolchain import (
+    BINARY_PATH_ENV_VARS,
     DEFAULT_FFMPEG_VERSION,
     REQUIRED_BINARIES,
+    VERSION_PIN_ENV_VAR,
     MediaToolchainError,
     assert_media_toolchain,
+    describe_pin,
     pinned_version,
     resolve_binary,
 )
@@ -75,14 +79,18 @@ def test_both_binaries_are_checked() -> None:
     assert set(REQUIRED_BINARIES) == {"ffmpeg", "ffprobe"}
 
 
+def _write_fake_binary(directory: Path, binary: str, version: str) -> None:
+    script = directory / binary
+    script.write_text(
+        f'#!/bin/sh\necho "{binary} version {version} Copyright (c) fake"\n',
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _write_fake_toolchain(directory: Path, version: str) -> None:
     for binary in REQUIRED_BINARIES:
-        script = directory / binary
-        script.write_text(
-            f'#!/bin/sh\necho "{binary} version {version} Copyright (c) fake"\n',
-            encoding="utf-8",
-        )
-        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        _write_fake_binary(directory, binary, version)
 
 
 def _run_entrypoint(repo_root: Path, path_dir: Path) -> subprocess.CompletedProcess[str]:
@@ -91,9 +99,13 @@ def _run_entrypoint(repo_root: Path, path_dir: Path) -> subprocess.CompletedProc
     # The explicit binary overrides win over PATH by design, so a developer machine that
     # sets them would otherwise make this test probe the real toolchain instead of the
     # fake one staged above. Clear them so PATH resolution is what is under test.
-    for override in ("FFMPEG_BINARY", "FFPROBE_BINARY"):
+    for override in BINARY_PATH_ENV_VARS.values():
         env.pop(override, None)
-    env["FFMPEG_REQUIRED_VERSION"] = pinned_version()
+    # Pin the child to the module constant rather than to `pinned_version()`. Feeding the
+    # child whatever the parent's environment says would make the entrypoint tests agree
+    # with the pin by construction, which is how a wrong default went unnoticed. The
+    # constant itself is anchored to `.env.example` by the contract test.
+    env[VERSION_PIN_ENV_VAR] = DEFAULT_FFMPEG_VERSION
     return subprocess.run(
         [sys.executable, "-m", "video_agent"],
         cwd=repo_root,
@@ -113,12 +125,12 @@ def test_entrypoint_exits_nonzero_on_version_drift(repo_root: Path, tmp_path: Pa
     assert result.returncode != 0
     assert "startup preflight failed" in result.stderr
     assert WRONG_VERSION in result.stderr
-    assert pinned_version() in result.stderr
+    assert DEFAULT_FFMPEG_VERSION in result.stderr
     assert "Traceback" not in result.stderr
 
 
 def test_entrypoint_exits_zero_when_the_pin_matches(repo_root: Path, tmp_path: Path) -> None:
-    _write_fake_toolchain(tmp_path, f"{pinned_version()}.0")
+    _write_fake_toolchain(tmp_path, f"{DEFAULT_FFMPEG_VERSION}.0")
     result = _run_entrypoint(repo_root, tmp_path)
 
     assert result.returncode == 0, result.stderr
@@ -185,6 +197,12 @@ class TestBinaryResolutionOverrides:
     def test_falls_back_to_path_when_no_override_is_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A real executable is staged on PATH, so the fallback has something to find.
+
+        Staging nothing and asserting `is None` cannot distinguish "fell back to PATH and
+        found nothing" from "did not fall back at all" — the earlier version of this test
+        made exactly that mistake and survived deleting the fallback branch.
+        """
         found = tmp_path / "ffprobe"
         found.write_text("#!/bin/sh\nexit 0\n")
         found.chmod(found.stat().st_mode | stat.S_IEXEC)
@@ -194,23 +212,264 @@ class TestBinaryResolutionOverrides:
 
         assert resolve_binary("ffprobe") == str(found)
 
-    def test_an_override_pointing_at_nothing_resolves_to_none(
+    def test_path_resolution_returns_none_only_when_nothing_is_staged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The negative half of the pair above, on a PATH proven empty of the binary."""
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.delenv("FFPROBE_BINARY", raising=False)
+        assert not (tmp_path / "ffprobe").exists()
+        assert resolve_binary("ffprobe") is None
+
+    def test_path_resolution_is_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative PATH entry must not yield a relative command.
+
+        `subprocess` hands a name containing no separator to a PATH search, so a relative
+        result would be re-resolved at exec time against a PATH that may have changed.
+        """
+        staged = tmp_path / "ffmpeg"
+        staged.write_text("#!/bin/sh\nexit 0\n")
+        staged.chmod(staged.stat().st_mode | stat.S_IEXEC)
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", ".")
+        monkeypatch.delenv("FFMPEG_BINARY", raising=False)
+
+        resolved = resolve_binary("ffmpeg")
+        assert resolved is not None
+        assert Path(resolved).is_absolute()
+
+    def test_a_relative_override_is_a_configuration_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`FFMPEG_BINARY=ffmpeg` validates one file and would execute another.
+
+        `Path("ffmpeg").is_file()` resolves against the *current working directory*, while
+        `subprocess.run(["ffmpeg", ...])` resolves against *PATH*. Staging a decoy in cwd and
+        a different binary on PATH is precisely that divergence, and it is the silent
+        mismatch this whole module exists to prevent — so it is rejected, not resolved.
+        """
+        decoy = tmp_path / "ffmpeg"
+        decoy.write_text("#!/bin/sh\nexit 0\n")
+        decoy.chmod(decoy.stat().st_mode | stat.S_IEXEC)
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        on_path = elsewhere / "ffmpeg"
+        on_path.write_text("#!/bin/sh\nexit 0\n")
+        on_path.chmod(on_path.stat().st_mode | stat.S_IEXEC)
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", str(elsewhere))
+        monkeypatch.setenv("FFMPEG_BINARY", "ffmpeg")
+
+        with pytest.raises(MediaToolchainError) as excinfo:
+            resolve_binary("ffmpeg")
+
+        message = str(excinfo.value)
+        assert "FFMPEG_BINARY" in message
+        assert "absolute" in message
+
+    def test_a_dot_relative_override_is_also_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`./ffmpeg` exists and is executable, but is still cwd-dependent at exec time."""
+        staged = tmp_path / "ffmpeg"
+        staged.write_text("#!/bin/sh\nexit 0\n")
+        staged.chmod(staged.stat().st_mode | stat.S_IEXEC)
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("FFMPEG_BINARY", "./ffmpeg")
+
+        with pytest.raises(MediaToolchainError, match="absolute"):
+            resolve_binary("ffmpeg")
+
+    def test_an_override_pointing_at_nothing_is_rejected_loudly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Never silently fall back to PATH when an override is set but wrong.
 
         Falling back would start the app against a binary the operator did not choose,
-        which is precisely the ambiguity the override exists to remove. Resolving to
-        None makes preflight fail loudly instead.
+        which is precisely the ambiguity the override exists to remove. The message must
+        name the variable and its value, not claim the binary is missing from PATH — it may
+        well be on PATH, which is what made the old wording misleading.
         """
-        monkeypatch.setenv("FFMPEG_BINARY", str(tmp_path / "does-not-exist"))
+        missing = tmp_path / "does-not-exist"
+        monkeypatch.setenv("FFMPEG_BINARY", str(missing))
         monkeypatch.setenv("PATH", str(tmp_path))
-        assert resolve_binary("ffmpeg") is None
 
-    def test_a_non_executable_override_resolves_to_none(
+        with pytest.raises(MediaToolchainError) as excinfo:
+            resolve_binary("ffmpeg")
+
+        message = str(excinfo.value)
+        assert "FFMPEG_BINARY" in message
+        assert str(missing) in message
+        assert "not found on PATH" not in message
+
+    def test_a_non_executable_override_is_rejected_loudly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         plain = tmp_path / "not-executable"
         plain.write_text("i am not a program\n")
         monkeypatch.setenv("FFMPEG_BINARY", str(plain))
-        assert resolve_binary("ffmpeg") is None
+
+        with pytest.raises(MediaToolchainError, match="not an executable file"):
+            resolve_binary("ffmpeg")
+
+    def test_every_required_binary_has_an_override_variable(self) -> None:
+        assert set(BINARY_PATH_ENV_VARS) == set(REQUIRED_BINARIES)
+
+
+class TestPinPrecision:
+    """`FFMPEG_REQUIRED_VERSION` may be MAJOR.MINOR or MAJOR.MINOR.PATCH."""
+
+    def test_a_three_component_pin_matches_that_exact_version(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`.env.example` says the image installs *exactly* this version, which invites a
+        precise value. Comparing a two-component slice of the actual against a raw
+        three-component pin could never match, so a more precise pin bricked startup.
+        """
+        monkeypatch.setenv(VERSION_PIN_ENV_VAR, "7.1.1")
+        assert_media_toolchain(probe=lambda _: "7.1.1")
+
+    def test_a_three_component_pin_rejects_a_different_patch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(VERSION_PIN_ENV_VAR, "7.1.1")
+        with pytest.raises(MediaToolchainError) as excinfo:
+            assert_media_toolchain(probe=lambda _: "7.1.2")
+
+        message = str(excinfo.value)
+        assert "7.1.1" in message
+        assert "7.1.2" in message
+        assert "7.1.1.x" not in message, "an exact pin must not be rendered as a wildcard"
+
+    def test_a_two_component_pin_still_accepts_any_patch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(VERSION_PIN_ENV_VAR, "7.1")
+        assert_media_toolchain(probe=lambda _: "7.1.99")
+
+    @pytest.mark.parametrize("bad", ["7", "seven.one", "7.1.1.1", "v7.1", "7.1-custom"])
+    def test_a_malformed_pin_is_rejected_with_a_clear_message(
+        self, bad: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(VERSION_PIN_ENV_VAR, bad)
+        with pytest.raises(MediaToolchainError) as excinfo:
+            pinned_version()
+
+        message = str(excinfo.value)
+        assert VERSION_PIN_ENV_VAR in message
+        assert bad in message
+
+    def test_describe_pin_renders_precision_honestly(self) -> None:
+        assert describe_pin("7.1") == "7.1.x"
+        assert describe_pin("7.1.1") == "7.1.1"
+
+
+class TestMatchedPair:
+    """`.env.example`: ffmpeg and ffprobe must be the SAME release, not merely both pinned."""
+
+    def test_binaries_from_different_patch_releases_are_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both satisfy a 7.1 pin, yet they are two different encoders."""
+        monkeypatch.setenv(VERSION_PIN_ENV_VAR, "7.1")
+        versions = {"ffmpeg": "7.1.1", "ffprobe": "7.1.99"}
+
+        with pytest.raises(MediaToolchainError) as excinfo:
+            assert_media_toolchain(probe=lambda binary: versions[binary])
+
+        message = str(excinfo.value)
+        assert "7.1.1" in message, "the message must name both versions"
+        assert "7.1.99" in message
+        assert "ffmpeg" in message
+        assert "ffprobe" in message
+
+    def test_a_matched_pair_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(VERSION_PIN_ENV_VAR, "7.1")
+        assert_media_toolchain(probe=lambda _: "7.1.1")
+
+    def test_the_entrypoint_refuses_a_mismatched_pair(
+        self, repo_root: Path, tmp_path: Path
+    ) -> None:
+        """End to end: two real scripts reporting different patch releases."""
+        _write_fake_binary(tmp_path, "ffmpeg", f"{DEFAULT_FFMPEG_VERSION}.1")
+        _write_fake_binary(tmp_path, "ffprobe", f"{DEFAULT_FFMPEG_VERSION}.2")
+        result = _run_entrypoint(repo_root, tmp_path)
+
+        assert result.returncode != 0
+        assert "not a matched pair" in result.stderr
+        assert f"{DEFAULT_FFMPEG_VERSION}.1" in result.stderr
+        assert f"{DEFAULT_FFMPEG_VERSION}.2" in result.stderr
+        assert "Traceback" not in result.stderr
+
+
+class TestProbeFailuresAreNotTracebacks:
+    """S0.1.4 test spec: a clear error, not a traceback leak.
+
+    The injectable `probe` never exercises these paths, so they are driven with real
+    binaries that hang or cannot be executed.
+    """
+
+    def test_a_hung_binary_is_reported_as_a_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for binary in REQUIRED_BINARIES:
+            script = tmp_path / binary
+            # Absolute path: PATH is about to be narrowed to tmp_path, so a bare `sleep`
+            # would exit 127 and be reported as a non-zero exit rather than a hang.
+            script.write_text("#!/bin/sh\nexec /bin/sleep 30\n", encoding="utf-8")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        monkeypatch.setenv("PATH", str(tmp_path))
+        for override in BINARY_PATH_ENV_VARS.values():
+            monkeypatch.delenv(override, raising=False)
+        monkeypatch.setattr(media_toolchain, "_PROBE_TIMEOUT_SECONDS", 1)
+
+        with pytest.raises(MediaToolchainError) as excinfo:
+            assert_media_toolchain()
+
+        message = str(excinfo.value)
+        assert "did not answer" in message
+        assert "ffmpeg" in message
+        assert "Traceback" not in message
+
+    def test_an_unexecutable_binary_is_reported_as_such(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A truncated or wrong-architecture binary raises OSError from `subprocess`."""
+        for binary in REQUIRED_BINARIES:
+            script = tmp_path / binary
+            script.write_bytes(b"\x00\x01\x02\x03")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        monkeypatch.setenv("PATH", str(tmp_path))
+        for override in BINARY_PATH_ENV_VARS.values():
+            monkeypatch.delenv(override, raising=False)
+
+        with pytest.raises(MediaToolchainError) as excinfo:
+            assert_media_toolchain()
+
+        message = str(excinfo.value)
+        assert "could not be executed" in message
+        assert "Traceback" not in message
+
+    def test_the_entrypoint_survives_an_unexecutable_binary(
+        self, repo_root: Path, tmp_path: Path
+    ) -> None:
+        """The real `main()` path: exit 1 with a sentence, never a traceback."""
+        for binary in REQUIRED_BINARIES:
+            script = tmp_path / binary
+            script.write_bytes(b"\x00\x01\x02\x03")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        result = _run_entrypoint(repo_root, tmp_path)
+
+        assert result.returncode != 0
+        assert "startup preflight failed" in result.stderr
+        assert "could not be executed" in result.stderr
+        assert "Traceback" not in result.stderr

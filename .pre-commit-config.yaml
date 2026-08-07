@@ -18,8 +18,11 @@ repos:
         args: ["--fix=lf"]
       - id: trailing-whitespace
 
+  # Pinned to the same ruff the venv and CI run (`uv run ruff --version`). Two different
+  # ruff versions gating one tree means the hook and `make lint` can disagree, which is how
+  # a lint failure reaches CI green. `tests/unit/test_toolchain_config.py` asserts they match.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.6
+    rev: v0.16.2
     hooks:
       - id: ruff-check
       - id: ruff-format

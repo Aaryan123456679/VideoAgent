@@ -5,16 +5,22 @@ S8 makes version drift a refuse-to-start condition, because a silent encoder cha
 unlogged output change. This module owns that assertion and nothing else — all actual media
 manipulation stays in the assembly wrapper (a later task).
 
-The container image must install exactly the pinned ``MAJOR.MINOR``; if the Dockerfile and
-the pin disagree, the application refuses to start, which is the intended behaviour rather
-than a bug.
+The container image must install exactly the pinned version; if the Dockerfile and the pin
+disagree, the application refuses to start, which is the intended behaviour rather than a bug.
 
 Both the pin and the binary locations are overridable by environment variable. Developer
 machines routinely carry more than one ffmpeg — a standalone build in ``~/.local/bin``
 shadowing a Homebrew install is common, and because such builds often ship ``ffmpeg``
 without ``ffprobe``, bare ``PATH`` resolution can silently pair binaries from two different
-releases. Resolving each binary explicitly makes that mismatch impossible to reach by
-accident rather than merely detectable after the fact.
+releases. Two rules keep that from being reachable by accident:
+
+* An override must be an **absolute** path. A bare name such as ``FFMPEG_BINARY=ffmpeg``
+  would be checked for existence against the current working directory but executed via a
+  ``PATH`` search, so the file validated and the file run need not be the same one. That is
+  the exact silent mismatch this module exists to prevent, so it is a configuration error
+  rather than a fallback.
+* Both binaries must report the **same** release, not merely two releases that happen to
+  share the pinned prefix. ``.env.example`` states this invariant; it is enforced here.
 
 This module reads ``os.environ`` directly rather than the settings object, because it runs
 during preflight, before settings are constructed.
@@ -30,67 +36,131 @@ from collections.abc import Callable
 from pathlib import Path
 
 DEFAULT_FFMPEG_VERSION = "7.1"
-"""Default pinned ``MAJOR.MINOR`` for both binaries. Patch releases are accepted."""
+"""Default version pin. Must equal the ``FFMPEG_REQUIRED_VERSION`` default in
+``.env.example``; ``tests/contract/test_env_example_contract.py`` asserts that."""
 
 REQUIRED_BINARIES: tuple[str, ...] = ("ffmpeg", "ffprobe")
 
-_BINARY_PATH_ENV_VARS = {"ffmpeg": "FFMPEG_BINARY", "ffprobe": "FFPROBE_BINARY"}
-
-
-def pinned_version() -> str:
-    """Return the required ``MAJOR.MINOR``, honouring ``FFMPEG_REQUIRED_VERSION``.
-
-    Read per call rather than captured at import so tests and preflight observe the same
-    environment the operator actually configured.
-    """
-    return os.environ.get("FFMPEG_REQUIRED_VERSION", "").strip() or DEFAULT_FFMPEG_VERSION
-
-
-def resolve_binary(binary: str) -> str | None:
-    """Resolve ``binary`` to an absolute path, preferring its explicit override.
-
-    ``FFMPEG_BINARY`` / ``FFPROBE_BINARY`` win over ``PATH`` so a matched pair can be named
-    directly. Returns ``None`` when the binary cannot be found at all.
-    """
-    override = os.environ.get(_BINARY_PATH_ENV_VARS[binary], "").strip()
-    if override:
-        path = Path(override)
-        return override if path.is_file() and os.access(path, os.X_OK) else None
-    return shutil.which(binary)
-
+VERSION_PIN_ENV_VAR = "FFMPEG_REQUIRED_VERSION"
+BINARY_PATH_ENV_VARS = {"ffmpeg": "FFMPEG_BINARY", "ffprobe": "FFPROBE_BINARY"}
 
 _PROBE_TIMEOUT_SECONDS = 10
 _VERSION_RE = re.compile(r"^(?:ffmpeg|ffprobe) version n?(?P<version>\d+\.\d+(?:\.\d+)?)")
+_PIN_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 
 VersionProbe = Callable[[str], str]
 
 
 class MediaToolchainError(RuntimeError):
-    """The media toolchain is absent or is not at the pinned version.
+    """The media toolchain is absent, misconfigured, or not at the pinned version.
 
     A ``RuntimeError`` subclass so callers can catch either, per the S0.1.4 acceptance
     criteria which name ``RuntimeError``.
     """
 
 
+def pinned_version() -> str:
+    """Return the required version, honouring ``FFMPEG_REQUIRED_VERSION``.
+
+    Read per call rather than captured at import so tests and preflight observe the same
+    environment the operator actually configured.
+
+    The pin may be ``MAJOR.MINOR`` (patch releases accepted) or ``MAJOR.MINOR.PATCH``
+    (exact). Anything else is a configuration error: a pin nobody can satisfy would brick
+    startup with a message that reads like a version mismatch rather than a typo.
+    """
+    raw = os.environ.get(VERSION_PIN_ENV_VAR, "").strip() or DEFAULT_FFMPEG_VERSION
+    if not _PIN_RE.match(raw):
+        message = (
+            f"{VERSION_PIN_ENV_VAR}={raw!r} is not a valid version pin. Expected "
+            f"MAJOR.MINOR (for example 7.1, patch releases accepted) or MAJOR.MINOR.PATCH "
+            f"(for example 7.1.1, exact). Leave it empty to use the default "
+            f"{DEFAULT_FFMPEG_VERSION}."
+        )
+        raise MediaToolchainError(message)
+    return raw
+
+
+def describe_pin(pin: str) -> str:
+    """Render a pin the way an operator reads it: ``7.1.x`` for MAJOR.MINOR, ``7.1.1`` exact."""
+    return f"{pin}.x" if pin.count(".") == 1 else pin
+
+
+def _matches_pin(actual: str, pin: str) -> bool:
+    """Compare at the precision the pin asks for, so a three-component pin is honoured.
+
+    Comparing ``_major_minor(actual)`` against a raw ``7.1.1`` pin can never match, which
+    would turn a *more precise* configuration into an unstartable one.
+    """
+    depth = pin.count(".") + 1
+    return ".".join(actual.split(".")[:depth]) == pin
+
+
+def resolve_binary(binary: str) -> str | None:
+    """Resolve ``binary`` to an absolute path, preferring its explicit override.
+
+    Returns ``None`` only when no override is set and the binary is not on ``PATH``.
+    Raises ``MediaToolchainError`` when an override is set but unusable — a set-but-wrong
+    override is a configuration error, never a reason to fall back to ``PATH`` and start
+    against a binary the operator did not choose.
+    """
+    env_var = BINARY_PATH_ENV_VARS[binary]
+    override = os.environ.get(env_var, "").strip()
+
+    if not override:
+        found = shutil.which(binary)
+        return str(Path(found).absolute()) if found is not None else None
+
+    path = Path(override)
+    if not path.is_absolute():
+        message = (
+            f"{env_var}={override!r} must be an absolute path. A bare or relative name is "
+            f"checked for existence against the current working directory but executed by a "
+            f"PATH search, so the file validated and the file run need not be the same one. "
+            f"Leave {env_var} empty to use PATH, or give the full path."
+        )
+        raise MediaToolchainError(message)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        message = (
+            f"{env_var}={override!r} is not an executable file. Refusing to fall back to "
+            f"PATH: an override exists to remove exactly that ambiguity."
+        )
+        raise MediaToolchainError(message)
+    return str(path)
+
+
 def _probe_version(binary: str) -> str:
     """Return the reported ``MAJOR.MINOR[.PATCH]`` of ``binary``.
 
     Raises ``FileNotFoundError`` when the binary cannot be resolved, and
-    ``MediaToolchainError`` when it runs but does not report a parseable version.
+    ``MediaToolchainError`` for every other failure — a hung binary, one that cannot be
+    executed, a non-zero exit or an unparseable banner. None of those may reach the operator
+    as a traceback.
     """
     resolved = resolve_binary(binary)
     if resolved is None:
         message = f"{binary} is not installed or not on PATH"
         raise FileNotFoundError(message)
 
-    completed = subprocess.run(
-        [resolved, "-version"],
-        capture_output=True,
-        text=True,
-        timeout=_PROBE_TIMEOUT_SECONDS,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [resolved, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        message = (
+            f"{binary} at {resolved} did not answer `-version` within "
+            f"{_PROBE_TIMEOUT_SECONDS}s. Refusing to start rather than hanging preflight."
+        )
+        raise MediaToolchainError(message) from None
+    except OSError as exc:
+        detail = exc.strerror or str(exc)
+        message = f"{binary} at {resolved} could not be executed: {detail}."
+        raise MediaToolchainError(message) from None
+
     if completed.returncode != 0:
         message = f"{binary} -version exited {completed.returncode}"
         raise MediaToolchainError(message)
@@ -103,35 +173,46 @@ def _probe_version(binary: str) -> str:
     return match.group("version")
 
 
-def _major_minor(version: str) -> str:
-    parts = version.split(".")
-    return ".".join(parts[:2])
-
-
 def assert_media_toolchain(probe: VersionProbe = _probe_version) -> None:
-    """Verify ffmpeg and ffprobe are present and at ``pinned_version()``.
+    """Verify ffmpeg and ffprobe are present, at ``pinned_version()``, and the same release.
 
-    Returns ``None`` when every binary matches. Raises ``MediaToolchainError`` (a
+    Returns ``None`` when every check passes. Raises ``MediaToolchainError`` (a
     ``RuntimeError``) naming the binary, the expected version and the actual version
     otherwise. The message is a plain sentence, never a traceback, because it is surfaced
     to an operator at startup.
 
     ``probe`` is injectable so the failure paths are testable without a doctored ``PATH``.
     """
+    pin = pinned_version()
+    reported: dict[str, str] = {}
+
     for binary in REQUIRED_BINARIES:
         try:
-            actual = probe(binary)
+            reported[binary] = probe(binary)
         except FileNotFoundError:
             message = (
                 f"{binary} is required but was not found on PATH; "
-                f"expected {binary} {pinned_version()}.x"
+                f"expected {binary} {describe_pin(pin)}"
             )
             raise MediaToolchainError(message) from None
 
-        if _major_minor(actual) != pinned_version():
+    for binary, actual in reported.items():
+        if not _matches_pin(actual, pin):
             message = (
-                f"{binary} version drift: expected {pinned_version()}.x, "
+                f"{binary} version drift: expected {describe_pin(pin)}, "
                 f"actual {actual}. Refusing to start — a silent encoder change is an "
                 f"unlogged output change (assembly.md S8)."
             )
             raise MediaToolchainError(message)
+
+    distinct = set(reported.values())
+    if len(distinct) > 1:
+        pairs = ", ".join(f"{name} {version}" for name, version in reported.items())
+        message = (
+            f"media toolchain is not a matched pair: {pairs}. Both binaries must report the "
+            f"same release — a patch-level encoder difference is still an unlogged output "
+            f"change (assembly.md S8). Set "
+            f"{' and '.join(BINARY_PATH_ENV_VARS[b] for b in REQUIRED_BINARIES)} to the "
+            f"absolute paths of one matched install."
+        )
+        raise MediaToolchainError(message)

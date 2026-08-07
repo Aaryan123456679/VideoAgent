@@ -38,11 +38,24 @@ def preflight() -> None:
 
 
 def main() -> int:
-    """Return a process exit code. Never raises."""
+    """Return a process exit code. Never raises.
+
+    The two clauses are not redundant. The first names the failures preflight is *designed*
+    to produce and renders them as the plain operator sentence each already carries. The
+    second is a backstop for everything else a preflight step can raise on the way to that
+    sentence — a hung binary, an unreadable file, a bug. Without it, "never raises" is a
+    docstring rather than a guarantee, and the operator gets a traceback instead of a
+    reason. `[CPS §Failure behaviour]` The exception type is named because "failed" with no
+    class is undiagnosable; the traceback itself belongs in the log, which does not exist
+    this early.
+    """
     try:
         preflight()
     except (RuntimeError, ValidationError) as exc:
         sys.stderr.write(f"startup preflight failed: {exc}\n")
+        return EXIT_PRECONDITION_FAILED
+    except Exception as exc:
+        sys.stderr.write(f"startup preflight failed: {type(exc).__name__}: {exc}\n")
         return EXIT_PRECONDITION_FAILED
     sys.stderr.write("startup preflight passed\n")
     return EXIT_OK

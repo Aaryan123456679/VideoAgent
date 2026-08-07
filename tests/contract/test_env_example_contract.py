@@ -19,16 +19,40 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
+from tests.support import BANNED_SECRET_PREFIXES, SECRET_SUFFIXES
+from video_agent.assembly.media_toolchain import (
+    BINARY_PATH_ENV_VARS,
+    DEFAULT_FFMPEG_VERSION,
+    VERSION_PIN_ENV_VAR,
+)
 from video_agent.config.settings import Settings
 
-BANNED_SECRET_PREFIXES = ("mhk_live_", "sk-", "pk-", "AKIA")
-SECRET_SUFFIXES = ("_KEY", "_KEY_ID", "_SECRET", "_TOKEN", "_PASSWORD")
 # Public by name and by design; the paired `LANGFUSE_SECRET_KEY` is the one that must not be
 # renderable. Typing an identifier as a secret would make it unusable as a log correlator.
 PUBLIC_DESPITE_SECRET_SUFFIX = frozenset({"LANGFUSE_PUBLIC_KEY"})
 GIT_TIMEOUT = 30
 
 pytestmark = pytest.mark.contract
+
+
+def test_the_credential_suffix_list_cannot_be_narrowed_silently(
+    env_example: dict[str, str],
+) -> None:
+    """Pin the deny-list itself, because narrowing it is invisible.
+
+    `docker-compose.dev.yml` carried a literal `POSTGRES_PASSWORD` while the compose test
+    checked only `("_KEY", "_KEY_ID", "_TOKEN", "_SECRET")` — the list was exactly one
+    suffix short of catching the one literal present, and nothing failed. Dropping a suffix
+    makes every check that uses it quieter without making any of them red, so the list needs
+    an assertion of its own.
+    """
+    assert set(SECRET_SUFFIXES) == {"_KEY", "_KEY_ID", "_SECRET", "_TOKEN", "_PASSWORD"}
+    assert set(BANNED_SECRET_PREFIXES) == {"mhk_live_", "sk-", "pk-", "AKIA"}
+
+    # And prove the list is not merely correct but load-bearing: it must match real
+    # variables in the contract, or it is a deny-list guarding an empty set.
+    matched = [name for name in env_example if name.endswith(SECRET_SUFFIXES)]
+    assert len(matched) >= len(SECRET_SUFFIXES)
 
 
 def test_env_example_declares_no_secret_values(env_example: dict[str, str]) -> None:
@@ -82,6 +106,33 @@ def test_settings_fields_match_env_example_exactly(env_example: dict[str, str]) 
 
     assert declared - contracted == set(), "Settings fields with no .env.example variable"
     assert contracted - declared == set(), ".env.example variables with no Settings field"
+
+
+def test_default_ffmpeg_pin_matches_the_env_example_default(env_example: dict[str, str]) -> None:
+    """The code default and the template default must be the same version.
+
+    Deliberately compares the *constant*, not `pinned_version()`. Every other ffmpeg test
+    derives its expectation from `pinned_version()`, which reads the environment, so the
+    whole suite stays self-consistent no matter what the constant says — setting it to
+    "99.99" left 58 tests passing. This is the one assertion with an external referent, and
+    it is what stops the shipped default from drifting away from the documented one.
+    """
+    assert env_example[VERSION_PIN_ENV_VAR] == DEFAULT_FFMPEG_VERSION
+
+
+def test_media_toolchain_env_vars_are_declared_in_the_contract(
+    env_example: dict[str, str],
+) -> None:
+    """Preflight reads `os.environ` directly, so its variables bypass `Settings`.
+
+    They still have to be documented, or an operator configures a toolchain override that
+    no template mentions.
+    """
+    read_by_preflight = {VERSION_PIN_ENV_VAR, *BINARY_PATH_ENV_VARS.values()}
+    undocumented = sorted(read_by_preflight - set(env_example))
+    assert undocumented == [], f"preflight reads variables .env.example does not declare: {
+        undocumented
+    }"
 
 
 def test_every_credential_variable_is_typed_as_a_secret(env_example: dict[str, str]) -> None:

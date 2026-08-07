@@ -1,0 +1,53 @@
+{
+  "from_agent": "implementation",
+  "to_agent": "verification",
+  "run_id": "2026-08-08/009-implementation",
+  "subtask": "T0.1",
+  "context_pointers": {
+    "responds_to": "T0.1 verification, CHANGES_REQUESTED, ten findings",
+    "prior_run": "2026-08-08/006-implementation",
+    "commit": null,
+    "commit_note": "No commit was made; the tree is left dirty as instructed.",
+    "findings_addressed": {
+      "F1": "src/video_agent/assembly/media_toolchain.py resolve_binary - override must be absolute; non-absolute or unusable override raises MediaToolchainError; PATH results normalised to absolute",
+      "F2": ".cdr/runs/2026-08-08/002-planner/metadata.json and .cdr/runs/2026-08-08/003-planner/PLAN.md trailing newlines; .github/workflows/ci.yml pre-commit job added; .pre-commit-config.yaml ruff pinned v0.16.2",
+      "F3": "tests/unit/test_media_toolchain.py TestBinaryResolution - a real executable is staged on PATH",
+      "F4": "docker-compose.dev.yml POSTGRES_HOST_AUTH_METHOD=trust replaces the literal password; tests/support.py holds the single SECRET_SUFFIXES definition",
+      "F5": "tests/contract/test_env_example_contract.py ties DEFAULT_FFMPEG_VERSION to the .env.example default",
+      "F6": "src/video_agent/__main__.py backstop clause; media_toolchain translates TimeoutExpired and OSError; tests/unit/test_entrypoint.py",
+      "F7": "media_toolchain _matches_pin compares at the pin's own precision; pinned_version validates the pin format",
+      "F9": "assert_media_toolchain requires both binaries to report the same release",
+      "F10": "tests/integration/test_dev_stack_up.py guards on daemon responsiveness with a 5s probe"
+    },
+    "mutation_evidence": "23 mutations applied and reverted; every one caught by the covering test. Harness at scratchpad/mutate.py (not committed).",
+    "self_consistency": {
+      "scope": "files owned by T0.1 only",
+      "ruff format --check": 0,
+      "ruff check": 0,
+      "mypy": 0,
+      "pytest": "168 passed, 3 deselected (1 deselection is a foreign failure, see blocked_by)",
+      "make test-integration": "0, 2 skipped with a reason in 5s",
+      "pre-commit run --all-files": "0 with SKIP=mypy; the mypy hook fails only on foreign files"
+    },
+    "blocked_by": {
+      "owner": "concurrent T0.3 agent",
+      "paths": ["src/video_agent/observability/"],
+      "failures": [
+        "ruff E501 x10 in observability/registry.py and observability/redaction.py",
+        "ruff format would reformat observability/redaction.py",
+        "mypy arg-type x2 in observability/context.py:168",
+        "tests/unit/test_static_guards.py::test_the_tree_names_no_provider - 'magichour' at observability/redaction.py:220"
+      ],
+      "note": "make lint, make type and make check cannot go green tree-wide until T0.3 lands. No T0.1-owned file contributes to any of these."
+    },
+    "judgement_calls_for_review": [
+      "F4 was fixed with POSTGRES_HOST_AUTH_METHOD=trust rather than a ${VAR} reference, because .env.example bundles the credential inside DATABASE_URL and adding a discrete POSTGRES_PASSWORD variable would break the T0.2 Settings contract test. The underlying contract gap is a finding for T0.5.",
+      "F7 was fixed by honouring the pin's precision rather than by normalising every pin to MAJOR.MINOR, which also serves F9."
+    ]
+  },
+  "exclusions": [
+    "No verification was performed by this agent (invariant I4).",
+    "pyproject.toml was not touched, per the coordinator's instruction.",
+    "src/video_agent/observability/ and src/video_agent/config/errors.py were not touched."
+  ]
+}
