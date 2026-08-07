@@ -1,0 +1,32 @@
+{
+  "from_agent": "planning",
+  "to_agent": "implementation",
+  "run_id": "2026-08-08/003-planner",
+  "subtask": "full-decomposition",
+  "context_pointers": {
+    "plan": ".cdr/runs/2026-08-08/003-planner/plan.json",
+    "plan_human_mirror": ".cdr/runs/2026-08-08/003-planner/PLAN.md",
+    "task_index": ".cdr/index/task.jsonl",
+    "first_subtask": "plan.json#/first_subtask (S0.1.1)",
+    "critical_path": "plan.json#/critical_path",
+    "vertical_slice": "plan.json#/vertical_slice (completed_by S2.3.3)",
+    "open_questions": "plan.json#/open_questions (Q1-Q10; Q1,Q2,Q3,Q4,Q6,Q7 blocking)",
+    "topological_order": "plan.json#/topological_order",
+    "github_emission_contract": "plan.json#/github",
+    "canonical_docs": "docs/HLD.md, docs/LLD/*.md",
+    "decision_register": "docs/HLD.md#appendix-a--design-decision-register",
+    "config_contract": ".env.example",
+    "upstream_handoffs": [
+      ".cdr/runs/2026-08-08/001-documentation/handoff.json",
+      ".cdr/runs/2026-08-08/002-documentation/handoff.json"
+    ]
+  },
+  "exclusions": [
+    "No source code, tests, pyproject.toml or migrations were written - planning only.",
+    "No GitHub issues, milestones, labels or repositories were created; nothing was pushed. Every node carries a `github` object a later emitter uses verbatim.",
+    "No git commit was made.",
+    ".cdr/index/regression.jsonl left empty - owned by the verification agent.",
+    ".cdr/memory/*.md not updated - owned by the coordinator; state.md still says 'implementation not started', which remains true.",
+    "Six blocking OPEN_QUESTIONS gate ten subtasks. Q6 (missing tenant table) and Q7 (0.75 constant vs env var) sit at depth 3 and depth 12 of the critical path respectively and should be resolved first."
+  ]
+}

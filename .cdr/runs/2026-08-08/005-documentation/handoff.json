@@ -1,0 +1,24 @@
+{
+  "from_agent": "documentation",
+  "to_agent": "implementer",
+  "run_id": "2026-08-08/005-documentation",
+  "subtask": "fold-open-question-resolutions",
+  "context_pointers": {
+    "resolutions_source": ".cdr/runs/2026-08-08/004-resolutions/RESOLUTIONS.md",
+    "decision_register": "docs/HLD.md#appendix-a--design-decision-register (D-65..D-74)",
+    "build_scope": "docs/HLD.md#12-delivery-milestones",
+    "per_module_status": "implementation_status in the front-matter of each docs/LLD/*.md",
+    "auth": "docs/LLD/api.md#6-authentication-authorisation-and-tenancy",
+    "tenant_ddl": "docs/LLD/persistence.md#2-public-interface--postgresql-schema",
+    "queue": "docs/LLD/graph.md#6-concurrency-control-and-the-queue and docs/LLD/persistence.md#51-the-job-queue-d-67",
+    "qc_threshold_config": "docs/LLD/qc.md#41-the-threshold-is-configuration-d-71",
+    "credits_rate": "docs/LLD/providers.md#75-cost-accounting-d-60",
+    "config_contract": ".env.example"
+  },
+  "exclusions": [
+    "docs/specs/* untouched - verbatim PDF transcriptions.",
+    "No application source code, prompts/ directory or tests created - documentation only.",
+    "No git commit or push. last_synced_commit left for the coordinator to re-stamp.",
+    "E3/E4 designs retained in full and marked deferred; they are not implementation instructions for this build."
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/005-documentation",
+  "macro": "cdr-documentation",
+  "macro_version": "1",
+  "agent": "documentation",
+  "subtask": "fold-open-question-resolutions",
+  "git_head": "438138573aa69c26727651b368e056262908bc69",
+  "run_key": "facdb183c70cf8eb",
+  "status": "completed",
+  "last_completed_step": "handoff_written",
+  "started_at": "2026-08-08T00:00:00Z",
+  "ended_at": "2026-08-08T00:00:00Z"
+}

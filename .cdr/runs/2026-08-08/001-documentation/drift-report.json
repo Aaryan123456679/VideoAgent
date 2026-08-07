@@ -1,0 +1,203 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/001-documentation",
+  "agent": "documentation",
+  "mode": "init",
+  "git_head": "438138573aa69c26727651b368e056262908bc69",
+  "generated_at": "2026-08-08T00:00:00Z",
+  "baseline": {
+    "exists": false,
+    "reason": "Greenfield repository. No canonical docs existed prior to this run and no doc carried a last_synced_commit, so there is no prior baseline to diff against. All CDR indexes were empty (0 lines in every .cdr/index/*.jsonl)."
+  },
+  "drift_detected": false,
+  "drift_sections": [],
+  "summary": "init mode: all canonical documentation created from scratch at commit 438138573aa69c26727651b368e056262908bc69. Zero drift by construction - there is no application source code in the repository, so no doc can contradict an implementation. Every doc is derived solely from docs/specs/common-platform-spec.md and docs/specs/video-agent-prd.md, both of which were verified against their origin PDFs (Guidelines.pdf, Video-Agent.pdf) during this run and found faithful.",
+  "inputs": [
+    {
+      "path": "docs/specs/common-platform-spec.md",
+      "role": "source-of-truth",
+      "note": "Governs wherever the PRD is silent. Verified against Guidelines.pdf."
+    },
+    {
+      "path": "docs/specs/video-agent-prd.md",
+      "role": "source-of-truth",
+      "note": "Verified against Video-Agent.pdf."
+    },
+    {
+      "path": ".cdr/schemas/run.metadata.schema.json",
+      "role": "schema"
+    },
+    {
+      "path": ".cdr/schemas/index.lines.schema.json",
+      "role": "schema"
+    },
+    {
+      "path": ".cdr/schemas/handoff.schema.json",
+      "role": "schema"
+    }
+  ],
+  "docs_created": [
+    {
+      "path": "docs/HLD.md",
+      "lines": 588,
+      "bytes": 43172,
+      "sha256": "834b44de596f5d52edfb71f6e44da82ee5ace41454dc58d2d4573d5947c21db7"
+    },
+    {
+      "path": "docs/LLD/api.md",
+      "lines": 276,
+      "bytes": 13969,
+      "sha256": "53fdecd1cb2a9cea6dbbf3e8ddc16de0feb23f6eadb2e35d8f339b3d6ebafe42"
+    },
+    {
+      "path": "docs/LLD/harness.md",
+      "lines": 284,
+      "bytes": 15015,
+      "sha256": "23077a05123778d49c011d56c5fddb28f80206d420e5ee9a8ca8fd1b13d99f09"
+    },
+    {
+      "path": "docs/LLD/gateway.md",
+      "lines": 235,
+      "bytes": 12027,
+      "sha256": "3c9e8c8e918be82452244c96f1e1335fd9fbd0148cb4b363568fe7e042dce2ff"
+    },
+    {
+      "path": "docs/LLD/graph.md",
+      "lines": 298,
+      "bytes": 15289,
+      "sha256": "48206a0944a604f68f4188d45b24eb89c0b35564bdb6a268cb02e11f34279b28"
+    },
+    {
+      "path": "docs/LLD/planning.md",
+      "lines": 251,
+      "bytes": 12723,
+      "sha256": "342329d8cb02d84636e3e40b7cf7b613567b75697b67f6355af9309b8d77cdca"
+    },
+    {
+      "path": "docs/LLD/providers.md",
+      "lines": 264,
+      "bytes": 15156,
+      "sha256": "7f9ab75730a0b39ac8affc373f2633472deac94155cd43b7e22bf328f23e24a4"
+    },
+    {
+      "path": "docs/LLD/qc.md",
+      "lines": 243,
+      "bytes": 13368,
+      "sha256": "51d95715fd362719ebf6cda8132d2d4672158286b7fa38d5dfa3c3ddc60ce31d"
+    },
+    {
+      "path": "docs/LLD/assembly.md",
+      "lines": 211,
+      "bytes": 12294,
+      "sha256": "98558b2bd473ecb3c96123388a1a05810b6fa698b3eaf588a71f8560c0182cff"
+    },
+    {
+      "path": "docs/LLD/persistence.md",
+      "lines": 333,
+      "bytes": 17417,
+      "sha256": "72b28bf2a6fa83a4d249b9cc709b380fb25aedb7b5642dd80ce48a6488cc3a85"
+    },
+    {
+      "path": "docs/LLD/observability.md",
+      "lines": 279,
+      "bytes": 15425,
+      "sha256": "ca7798ced78d8582d39cbdfdc3171f7143f835d11b3c58ab4dd265614c8ad272"
+    },
+    {
+      "path": "README.md",
+      "lines": 135,
+      "bytes": 7691,
+      "sha256": "4ea3f3143894f0fc77615e8d2583dae8a51383f54704619b17bb52933f27b545"
+    },
+    {
+      "path": "AGENT.md",
+      "lines": 270,
+      "bytes": 13444,
+      "sha256": "5b93e2f9d75e0b300fd1c9a9dc067402fce96933656f304c3f3c3b4f41e1bc96"
+    }
+  ],
+  "docs_updated": [],
+  "docs_unchanged": [],
+  "sections_regenerated": "ALL (init)",
+  "indexes_seeded": {
+    ".cdr/index/file.jsonl": 15,
+    ".cdr/index/feature.jsonl": 68,
+    ".cdr/index/decision.jsonl": 57
+  },
+  "invariants": [
+    {
+      "id": "I1",
+      "statement": "Never leave a canonical doc half-written",
+      "held": true,
+      "evidence": "All 13 canonical docs written whole in a single pass; each verified for front-matter stamp, complete section set and resolvable internal links."
+    }
+  ],
+  "verification": {
+    "front_matter_stamped": {
+      "checked": 13,
+      "failed": 0
+    },
+    "decision_refs_resolvable": {
+      "cited": 57,
+      "registered": 57,
+      "dangling": 0,
+      "unused": 0
+    },
+    "relative_links_resolvable": {
+      "broken": 0
+    },
+    "spec_vs_pdf_fidelity": {
+      "checked": 2,
+      "discrepancies": 0
+    }
+  },
+  "open_questions": [
+    {
+      "id": "A1",
+      "topic": "repair attempt cap",
+      "tension": "PRD 'capped at 2 attempts' does not say whether the initial generation counts.",
+      "resolution": "D-01 - 2 repair attempts after the initial generation (max 3 per shot).",
+      "needs_product_confirmation": true
+    },
+    {
+      "id": "A2",
+      "topic": "0.75 continuity threshold",
+      "tension": "PRD states 0.75 only as a success-metric threshold ('>= 85% of jobs'), not as a QC gate.",
+      "resolution": "D-39 - 0.75 is the acceptance gate; shots that exhaust repairs below it still ship flagged, which is why the fleet target is 85% rather than 100%.",
+      "needs_product_confirmation": true
+    },
+    {
+      "id": "A3",
+      "topic": "beat durations",
+      "tension": "PRD header says 'four 10-second shots'; the method says only 'summing to exactly 40s'.",
+      "resolution": "D-03 - v1 fixes 10s per beat; duration_s field exists so unequal beats are a config change.",
+      "needs_product_confirmation": false
+    },
+    {
+      "id": "A4",
+      "topic": "single egress vs video generation",
+      "tension": "CPS says LiteLLM is 'single egress for every model call'; LiteLLM does not front video generation APIs.",
+      "resolution": "D-06 - LiteLLM is the single egress for every LLM call; video uses a parallel capability registry under the same failure policy and the same alias-only rule.",
+      "needs_product_confirmation": true
+    },
+    {
+      "id": "A5",
+      "topic": "no-progress vs the repair loop",
+      "tension": "CPS 'same failure signature twice -> stop immediately' contradicts a repair loop that by construction retries the same shot.",
+      "resolution": "D-02 + D-18 - signatures are scoped (shot vs job) and include a score band.",
+      "needs_product_confirmation": false
+    },
+    {
+      "id": "A6",
+      "topic": "unused platform components",
+      "tension": "CPS mandates a vector store and the realtime-voice / embed-default aliases; Video Agent v1 has no consumer for any of them.",
+      "resolution": "D-13 - declared, not built.",
+      "needs_product_confirmation": false
+    }
+  ],
+  "next_actions": [
+    "Product confirmation on open questions A1, A2 and A4.",
+    "Run CDR documentation in sync mode once the first application code lands; regenerate only drifted sections.",
+    "Seed .cdr/index/task.jsonl and .cdr/index/regression.jsonl from a planning run - not owned by the documentation agent."
+  ]
+}

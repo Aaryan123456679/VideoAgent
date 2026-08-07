@@ -1,0 +1,35 @@
+{"path": "docs/HLD.md", "module": "hld", "features": ["system-overview", "job-lifecycle-graph", "termination-outcomes", "model-alias-routing", "sequential-tradeoff", "resilience-guarantees", "data-model", "observability-model", "success-metrics", "design-decision-register", "build-scope-epics"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/api.md", "module": "api", "features": ["job-lifecycle-api", "idempotency", "error-envelope", "progress-stream", "tenancy-authz", "tenant-api-key-auth"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/harness.md", "module": "harness", "features": ["harness-loop", "context-tool-ownership", "budget-caps", "termination-outcomes", "no-progress-detection"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/gateway.md", "module": "gateway", "features": ["model-alias-routing", "retry-fallback-circuit-break", "degrade-and-flag", "prompt-registry-integration", "cost-accounting"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/graph.md", "module": "graph", "features": ["graph-topology", "sequential-shot-loop", "repair-back-edge", "checkpoint-resume", "shot-level-regeneration", "job-concurrency-control", "job-queue-redis-streams"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/planning.md", "module": "planning", "features": ["story-planning", "continuity-bible-lock", "bible-renderer", "in-repo-prompt-authoring"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/providers.md", "module": "providers", "features": ["provider-abstraction", "capability-negotiation", "provider-failover", "higgsfield-mcp-adapter", "prompt-composition", "frame-chaining", "magic-hour-adapter", "provider-substitution", "credits-cost-reconciliation"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/qc.md", "module": "qc", "features": ["continuity-qc-scoring", "continuity-threshold", "repair-policy", "qc-calibration"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/assembly.md", "module": "assembly", "features": ["frame-extraction", "ffmpeg-stitch-normalise", "music-bed", "thumbnail", "partial-delivery"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/persistence.md", "module": "persistence", "features": ["postgres-rls-schema", "expand-contract-migrations", "redis-state", "artifact-storage", "presigned-urls", "bible-immutability", "tenant-api-key-auth", "tenant-table", "job-queue-redis-streams"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/LLD/observability.md", "module": "observability", "features": ["langfuse-tracing", "langfuse-scores", "prompt-registry-integration", "structured-logging", "redaction", "error-taxonomy", "ci-gates", "in-repo-prompt-authoring"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "README.md", "module": "readme", "features": ["repo-navigation", "doc-hierarchy", "cdr-workflow-entrypoints", "build-scope-epics"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "AGENT.md", "module": "agent", "features": ["agent-non-negotiables", "alias-only-rule", "never-logged-rule", "expand-contract-rule", "feature-flag-rollout-rule", "cdr-state-location"], "last_change_run": "2026-08-08/005-documentation"}
+{"path": "docs/specs/common-platform-spec.md", "module": "specs", "features": ["source-of-truth"], "last_change_run": "pre-cdr"}
+{"path": "docs/specs/video-agent-prd.md", "module": "specs", "features": ["source-of-truth"], "last_change_run": "pre-cdr"}
+{"path": ".env.example", "module": "config", "features": ["provider-substitution", "runtime-configuration"], "last_change_run": "pre-cdr"}
+{"path": ".cdr/runs/2026-08-08/004-resolutions/RESOLUTIONS.md", "module": "cdr", "features": ["open-question-resolutions"], "last_change_run": "2026-08-08/004-resolutions"}
+{"path": "pyproject.toml", "module": "foundation", "features": ["repo-skeleton", "toolchain", "lint-format-typecheck", "pytest-harness"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "uv.lock", "module": "foundation", "features": ["repo-skeleton"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "Makefile", "module": "foundation", "features": ["toolchain", "lint-format-typecheck", "pytest-harness"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": ".pre-commit-config.yaml", "module": "foundation", "features": ["lint-format-typecheck"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": ".github/workflows/ci.yml", "module": "foundation", "features": ["ci-gates", "pytest-harness"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "docker-compose.dev.yml", "module": "foundation", "features": ["dev-stack"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "src/video_agent/__init__.py", "module": "foundation", "features": ["repo-skeleton"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "src/video_agent/__main__.py", "module": "foundation", "features": ["startup-preflight"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "src/video_agent/assembly/media_toolchain.py", "module": "assembly", "features": ["ffmpeg-version-pin", "startup-preflight"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/conftest.py", "module": "foundation", "features": ["pytest-harness"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/unit/test_package_layout.py", "module": "foundation", "features": ["repo-skeleton"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/unit/test_toolchain_config.py", "module": "foundation", "features": ["lint-format-typecheck"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/unit/test_pytest_and_ci_config.py", "module": "foundation", "features": ["pytest-harness", "ci-gates"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/unit/test_dev_stack.py", "module": "foundation", "features": ["dev-stack"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/unit/test_media_toolchain.py", "module": "assembly", "features": ["ffmpeg-version-pin", "startup-preflight"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/unit/test_async_smoke.py", "module": "foundation", "features": ["pytest-harness"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/contract/test_env_example_contract.py", "module": "config", "features": ["config-contract"], "last_change_run": "2026-08-08/006-implementation"}
+{"path": "tests/integration/test_dev_stack_up.py", "module": "foundation", "features": ["dev-stack"], "last_change_run": "2026-08-08/006-implementation"}

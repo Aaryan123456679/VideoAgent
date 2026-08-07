@@ -1,0 +1,166 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-agent"
+version = "0.1.0"
+description = "Agentic text-to-video pipeline with continuity-preserving frame chaining."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "Video Agent" }]
+
+# Canonical stack — HLD S2 / CPS SCanonical stack. Nothing outside this list is
+# a runtime dependency of the application at M0.
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
+    "pydantic>=2.9,<3.0",
+    "pydantic-settings>=2.6,<3.0",
+    "sqlalchemy[asyncio]>=2.0.36,<3.0",
+    "asyncpg>=0.30,<0.31",
+    "alembic>=1.14,<2.0",
+    "redis>=5.2,<7.0",
+    "httpx>=0.27,<1.0",
+    "langgraph>=0.2.50,<1.0",
+    "langfuse>=2.53,<4.0",
+    "boto3>=1.35,<2.0",
+]
+
+[project.scripts]
+video-agent = "video_agent.__main__:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13,<2.0",
+    "pre-commit>=4.0,<5.0",
+    "pytest>=8.3,<9.0",
+    "pytest-asyncio>=0.24,<2.0",
+    "pytest-cov>=6.0,<8.0",
+    "pyyaml>=6.0,<7.0",
+    "ruff>=0.8,<1.0",
+    "types-pyyaml>=6.0,<7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_agent"]
+
+# ---------------------------------------------------------------------------
+# Lint + format (ruff). S0.1.2: zero baseline suppressions. `lint.ignore` and
+# `lint.per-file-ignores` are deliberately absent — a rule that cannot pass is
+# removed from `select`, never silenced after the fact.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "A",     # flake8-builtins
+    "ANN",   # flake8-annotations — every def is typed
+    "ARG",   # flake8-unused-arguments
+    "ASYNC", # flake8-async — blocking calls in async defs
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "DTZ",   # flake8-datetimez — no naive datetimes
+    "E",     # pycodestyle errors
+    "ERA",   # eradicate — no commented-out code
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "PGH",   # pygrep-hooks — PGH003 bans a bare `# type: ignore`
+    "PL",    # pylint
+    "PT",    # flake8-pytest-style
+    "PTH",   # flake8-use-pathlib
+    "RET",   # flake8-return
+    "RUF",   # ruff-specific
+    # flake8-bandit, enumerated rather than taken wholesale. S603 (`subprocess` called at
+    # all) is deliberately not selected: every subprocess call in this tree is an argv list
+    # against a `shutil.which`-resolved absolute path, so S603 would only buy inline
+    # suppressions, and S0.1.2 requires zero of those. S602/S604/S605/S606 (the actual shell
+    # risks) and S607 (partial executable path) *are* selected and pass.
+    "S102",  # exec
+    "S105",  # hardcoded password string
+    "S106",  # hardcoded password argument
+    "S107",  # hardcoded password default
+    "S108",  # insecure temp file
+    "S110",  # try-except-pass
+    "S112",  # try-except-continue
+    "S301",  # pickle
+    "S306",  # mktemp
+    "S307",  # eval
+    "S311",  # non-cryptographic random
+    "S324",  # weak hash
+    "S501",  # requests with verify=False
+    "S506",  # unsafe yaml.load
+    "S602",  # subprocess with shell=True
+    "S604",  # call with shell=True
+    "S605",  # start process with a shell
+    "S606",  # start process without a shell
+    "S607",  # start process with a partial executable path
+    "S608",  # hardcoded SQL expression
+    "S609",  # unix wildcard injection
+    "S612",  # insecure logging.config.listen
+    "S701",  # jinja2 autoescape disabled
+    "SIM",   # flake8-simplify
+    "T20",   # flake8-print — AGENT.md S3: no print, structured logs only
+    "TID",   # flake8-tidy-imports
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+]
+ignore = []
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# ---------------------------------------------------------------------------
+# Type check (mypy). S0.1.2 acceptance 2 and 5: strict, and no `overrides`
+# table — a per-module relaxation is a finding, not a configuration option.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "tests"]
+strict = true
+disallow_any_generics = true
+warn_unused_ignores = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+pretty = true
+show_error_codes = true
+
+# ---------------------------------------------------------------------------
+# Tests (pytest). S0.1.3: strict asyncio, strict markers, integration
+# deselected by default, coverage reported but not gated.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+norecursedirs = ["_fixtures"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "-m",
+    "not integration",
+    "--cov=video_agent",
+    "--cov-report=term-missing",
+]
+markers = [
+    "integration: requires the dev stack (docker-compose.dev.yml); deselected by default",
+    "contract: asserts a cross-module or external contract",
+]
+
+[tool.coverage.run]
+source = ["video_agent"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]

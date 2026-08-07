@@ -1,0 +1,49 @@
+{
+  "from_agent": "documentation",
+  "to_agent": "planning",
+  "run_id": "2026-08-08/001-documentation",
+  "subtask": "init",
+  "context_pointers": {
+    "canonical_docs": [
+      "docs/HLD.md",
+      "docs/LLD/api.md",
+      "docs/LLD/harness.md",
+      "docs/LLD/gateway.md",
+      "docs/LLD/graph.md",
+      "docs/LLD/planning.md",
+      "docs/LLD/providers.md",
+      "docs/LLD/qc.md",
+      "docs/LLD/assembly.md",
+      "docs/LLD/persistence.md",
+      "docs/LLD/observability.md",
+      "README.md",
+      "AGENT.md"
+    ],
+    "system_design": "docs/HLD.md",
+    "graph_topology": "docs/HLD.md#32-nodes and docs/LLD/graph.md#3-topology",
+    "termination_model": "docs/LLD/harness.md#5-termination-decisions",
+    "decision_register": "docs/HLD.md#appendix-a--design-decision-register",
+    "decision_index": ".cdr/index/decision.jsonl",
+    "feature_index": ".cdr/index/feature.jsonl",
+    "file_index": ".cdr/index/file.jsonl",
+    "drift_report": ".cdr/runs/2026-08-08/001-documentation/drift-report.json",
+    "specs": [
+      "docs/specs/common-platform-spec.md",
+      "docs/specs/video-agent-prd.md"
+    ],
+    "milestone_to_module_map": "docs/HLD.md#12-delivery-milestones",
+    "module_test_strategies": "section 'Test strategy' (last section) of each docs/LLD/*.md",
+    "agent_hard_rules": "AGENT.md#1-hard-rules--never-violate",
+    "needs_product_confirmation": [
+      "A1",
+      "A2",
+      "A4"
+    ]
+  },
+  "exclusions": [
+    "No application source code, pyproject.toml or tests were created - documentation only.",
+    "No git commit or push was performed.",
+    ".cdr/index/task.jsonl and .cdr/index/regression.jsonl were left empty; they are owned by planning and verification agents.",
+    "Concrete budget cap values (D-08) and QC dimension weights (D-37) are illustrative defaults for config, not committed product numbers."
+  ]
+}

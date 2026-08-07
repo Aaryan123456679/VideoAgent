@@ -1,0 +1,24 @@
+{
+  "from_agent": "documentation",
+  "to_agent": "planning",
+  "run_id": "2026-08-08/002-documentation",
+  "subtask": "provider-substitution",
+  "context_pointers": {
+    "provider_substitution_decision": "docs/HLD.md#appendix-a--design-decision-register (D-58..D-64)",
+    "magic_hour_adapter_contract": "docs/LLD/providers.md#7-magic-hour-adapter",
+    "capability_declaration": "docs/LLD/providers.md#31-what-magic-hour-declares",
+    "error_mapping": "docs/LLD/providers.md#74-error-mapping",
+    "cost_reconciliation": "docs/LLD/providers.md#75-cost-accounting-d-60 and docs/LLD/harness.md#4-budget-caps",
+    "runtime_config": ".env.example",
+    "readme_disclosure": "README.md (status note)",
+    "drift_report": ".cdr/runs/2026-08-08/002-documentation/drift-report.json",
+    "baseline_run": ".cdr/runs/2026-08-08/001-documentation/"
+  },
+  "exclusions": [
+    "docs/specs/* deliberately unchanged - verbatim PDF transcriptions naming Higgsfield.",
+    "docs/LLD/gateway.md unchanged - it governs LLM egress only; video egress is D-06.",
+    "No application source code created. No git commit or push.",
+    "last_synced_commit left at the run-001 value for the coordinator to re-stamp.",
+    "style.quality_mode was NOT documented - see drift report note and the agent's report."
+  ]
+}

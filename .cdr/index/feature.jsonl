@@ -1,0 +1,77 @@
+{"feature": "agent-non-negotiables", "module": "agent", "docs": ["AGENT.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "alias-only-rule", "module": "agent", "docs": ["AGENT.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "artifact-storage", "module": "persistence", "docs": ["docs/LLD/persistence.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "bible-immutability", "module": "persistence", "docs": ["docs/LLD/persistence.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "bible-renderer", "module": "planning", "docs": ["docs/LLD/planning.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "budget-caps", "module": "harness", "docs": ["docs/LLD/harness.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "build-scope-epics", "module": "hld", "docs": ["AGENT.md", "README.md", "docs/HLD.md"], "subtask": "fold-open-question-resolutions", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "capability-negotiation", "module": "providers", "docs": ["docs/LLD/providers.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "cdr-state-location", "module": "agent", "docs": ["AGENT.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "cdr-workflow-entrypoints", "module": "readme", "docs": ["README.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "checkpoint-resume", "module": "graph", "docs": ["docs/LLD/graph.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "ci-gates", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "context-tool-ownership", "module": "harness", "docs": ["docs/LLD/harness.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "continuity-bible-lock", "module": "planning", "docs": ["docs/LLD/planning.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "continuity-qc-scoring", "module": "qc", "docs": ["docs/LLD/qc.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "continuity-threshold", "module": "qc", "docs": ["docs/LLD/qc.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "cost-accounting", "module": "gateway", "docs": ["docs/LLD/gateway.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "credits-cost-reconciliation", "module": "providers", "docs": ["docs/LLD/harness.md", "docs/LLD/observability.md", "docs/LLD/persistence.md", "docs/LLD/providers.md"], "subtask": "provider-substitution", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "data-model", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "degrade-and-flag", "module": "gateway", "docs": ["docs/LLD/gateway.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "design-decision-register", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "doc-hierarchy", "module": "readme", "docs": ["README.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "error-envelope", "module": "api", "docs": ["docs/LLD/api.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "error-taxonomy", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "expand-contract-migrations", "module": "persistence", "docs": ["docs/LLD/persistence.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "expand-contract-rule", "module": "agent", "docs": ["AGENT.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "feature-flag-rollout-rule", "module": "agent", "docs": ["AGENT.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "ffmpeg-stitch-normalise", "module": "assembly", "docs": ["docs/LLD/assembly.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "frame-chaining", "module": "providers", "docs": ["docs/LLD/providers.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "frame-extraction", "module": "assembly", "docs": ["docs/LLD/assembly.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "graph-topology", "module": "graph", "docs": ["docs/LLD/graph.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "harness-loop", "module": "harness", "docs": ["docs/LLD/harness.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "higgsfield-mcp-adapter", "module": "providers", "docs": ["docs/LLD/providers.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "idempotency", "module": "api", "docs": ["docs/LLD/api.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "in-repo-prompt-authoring", "module": "observability", "docs": ["README.md", "docs/LLD/observability.md", "docs/LLD/planning.md"], "subtask": "fold-open-question-resolutions", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "job-concurrency-control", "module": "graph", "docs": ["docs/LLD/graph.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "job-lifecycle-api", "module": "api", "docs": ["docs/LLD/api.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "job-lifecycle-graph", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "job-queue-redis-streams", "module": "graph", "docs": ["docs/HLD.md", "docs/LLD/graph.md", "docs/LLD/persistence.md"], "subtask": "fold-open-question-resolutions", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "langfuse-scores", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "langfuse-tracing", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "magic-hour-adapter", "module": "providers", "docs": ["docs/HLD.md", "docs/LLD/providers.md"], "subtask": "provider-substitution", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "model-alias-routing", "module": "gateway", "docs": ["docs/HLD.md", "docs/LLD/gateway.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "music-bed", "module": "assembly", "docs": ["docs/LLD/assembly.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "never-logged-rule", "module": "agent", "docs": ["AGENT.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "no-progress-detection", "module": "harness", "docs": ["docs/LLD/harness.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "observability-model", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "partial-delivery", "module": "assembly", "docs": ["docs/LLD/assembly.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "postgres-rls-schema", "module": "persistence", "docs": ["docs/LLD/persistence.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "presigned-urls", "module": "persistence", "docs": ["docs/LLD/persistence.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "progress-stream", "module": "api", "docs": ["docs/LLD/api.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "prompt-composition", "module": "providers", "docs": ["docs/LLD/providers.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "prompt-registry-integration", "module": "observability", "docs": ["docs/LLD/gateway.md", "docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "provider-abstraction", "module": "providers", "docs": ["docs/LLD/providers.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "provider-failover", "module": "providers", "docs": ["docs/LLD/providers.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "provider-substitution", "module": "providers", "docs": ["AGENT.md", "README.md", "docs/HLD.md", "docs/LLD/providers.md", ".env.example"], "subtask": "provider-substitution", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "qc-calibration", "module": "qc", "docs": ["docs/LLD/qc.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "redaction", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "redis-state", "module": "persistence", "docs": ["docs/LLD/persistence.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "repair-back-edge", "module": "graph", "docs": ["docs/LLD/graph.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "repair-policy", "module": "qc", "docs": ["docs/LLD/qc.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "repo-navigation", "module": "readme", "docs": ["README.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "resilience-guarantees", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "retry-fallback-circuit-break", "module": "gateway", "docs": ["docs/LLD/gateway.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "runtime-configuration", "module": "config", "docs": ["README.md", ".env.example"], "subtask": "provider-substitution", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "sequential-shot-loop", "module": "graph", "docs": ["docs/LLD/graph.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "sequential-tradeoff", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "shot-level-regeneration", "module": "graph", "docs": ["docs/LLD/graph.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "story-planning", "module": "planning", "docs": ["docs/LLD/planning.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "structured-logging", "module": "observability", "docs": ["docs/LLD/observability.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "success-metrics", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "system-overview", "module": "hld", "docs": ["docs/HLD.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "tenancy-authz", "module": "api", "docs": ["docs/LLD/api.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "tenant-api-key-auth", "module": "api", "docs": ["docs/HLD.md", "docs/LLD/api.md", "docs/LLD/persistence.md"], "subtask": "fold-open-question-resolutions", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "tenant-table", "module": "persistence", "docs": ["docs/LLD/harness.md", "docs/LLD/persistence.md"], "subtask": "fold-open-question-resolutions", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "termination-outcomes", "module": "harness", "docs": ["docs/HLD.md", "docs/LLD/harness.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}
+{"feature": "thumbnail", "module": "assembly", "docs": ["docs/LLD/assembly.md"], "subtask": "init", "commit": "438138573aa69c26727651b368e056262908bc69"}

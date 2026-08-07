@@ -1,0 +1,99 @@
+# Local development stack. Four services, matching the connection strings that
+# `.env.example` ships as defaults:
+#
+#   DATABASE_URL          postgresql+asyncpg://videoagent:videoagent@localhost:5432/videoagent
+#   REDIS_URL             redis://localhost:6379/0
+#   LITELLM_BASE_URL      http://localhost:4000
+#   ARTIFACT_ENDPOINT_URL (blank in .env.example — set it to http://localhost:9000 for MinIO)
+#
+# No credential literal appears below. Every secret is a `${VAR}` reference resolved from the
+# git-ignored `.env`. MinIO refuses to start with an empty root user/password, so AWS_ACCESS_KEY_ID
+# and AWS_SECRET_ACCESS_KEY must be filled in `.env` before `make compose-up`.
+
+name: video-agent-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: video-agent-postgres
+    environment:
+      POSTGRES_USER: videoagent
+      POSTGRES_DB: videoagent
+      # Local-only development database. Matches the DATABASE_URL default in .env.example.
+      POSTGRES_PASSWORD: videoagent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U videoagent -d videoagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: video-agent-redis
+    command: ["redis-server", "--appendonly", "yes", "--databases", "16"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: video-agent-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.65.0-stable
+    container_name: video-agent-litellm
+    command: ["--port", "4000", "--num_workers", "1"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://localhost:4000/health/liveliness")
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

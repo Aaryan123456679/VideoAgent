@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/002-planner",
+  "macro": "cdr-planning",
+  "macro_version": "1",
+  "agent": "planner",
+  "subtask": "full-decomposition",
+  "git_head": "438138573aa69c26727651b368e056262908bc69",
+  "run_key": "56fa8346d9fd2124",
+  "status": "in_progress",
+  "last_completed_step": "inputs_read",
+  "started_at": "2026-08-07T20:15:17Z",
+  "ended_at": null
+}

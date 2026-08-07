@@ -1,0 +1,274 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/002-documentation",
+  "agent": "documentation",
+  "mode": "sync",
+  "git_head": "438138573aa69c26727651b368e056262908bc69",
+  "generated_at": "2026-08-08T00:00:00Z",
+  "baseline": {
+    "exists": true,
+    "run_id": "2026-08-08/001-documentation",
+    "reason": "Docs created by run 001 at the same commit. This run diffs against that baseline."
+  },
+  "drift_detected": true,
+  "drift_trigger": {
+    "kind": "external-dependency-change",
+    "source": "coordinator directive",
+    "summary": "Video generation provider changed from Higgsfield MCP (named by the PRD) to Magic Hour, because Higgsfield exposes no free or trial API tier and no credential was obtainable for this build."
+  },
+  "drift_sections": [
+    {
+      "doc": "docs/LLD/providers.md",
+      "sections": [
+        "1 Responsibility",
+        "2 Public interface",
+        "3 Capability negotiation",
+        "5 Prompt composition",
+        "6 Frame chaining contract",
+        "7 Magic Hour adapter (was: Higgsfield MCP adapter)",
+        "9 Failure modes",
+        "10 Test strategy"
+      ],
+      "reason": "Adapter contract replaced with the verified Magic Hour REST contract."
+    },
+    {
+      "doc": "docs/HLD.md",
+      "sections": [
+        "2 System context",
+        "5 Termination outcomes",
+        "6 Model routing",
+        "8.4 Provider abstraction",
+        "9 Data model",
+        "12 Delivery milestones",
+        "Appendix A design decision register"
+      ],
+      "reason": "Provider references, seed/reproducibility caveat, and D-58..D-64 added; D-30 superseded, D-41 and D-52 amended."
+    },
+    {
+      "doc": "README.md",
+      "sections": [
+        "Status note",
+        "Module documents",
+        "How to run and test"
+      ],
+      "reason": "Visible disclosure of the substitution and its rationale; .env.example referenced."
+    },
+    {
+      "doc": "AGENT.md",
+      "sections": [
+        "2 Alias-only model rule",
+        "3 Never logged",
+        "8 Scope discipline"
+      ],
+      "reason": "Provider-name grep list, bearer-credential list, and a provider reality check."
+    },
+    {
+      "doc": "docs/LLD/qc.md",
+      "sections": [
+        "6 Repair policy rule 4"
+      ],
+      "reason": "'Different seed' rule invalidated by the absence of seed control."
+    },
+    {
+      "doc": "docs/LLD/persistence.md",
+      "sections": [
+        "2 shot_attempt DDL",
+        "9 Failure modes",
+        "10 Test strategy"
+      ],
+      "reason": "seed made nullable with an explicit seed_supported flag; provider_project_id, credits_charged and cost_is_final added."
+    },
+    {
+      "doc": "docs/LLD/harness.md",
+      "sections": [
+        "3.2 Tool registry",
+        "4 Budget caps",
+        "8 Failure modes",
+        "9 Test strategy"
+      ],
+      "reason": "Monotonic-ledger rule amended to monotonic-per-finalised-charge for provisional credit billing."
+    },
+    {
+      "doc": "docs/LLD/observability.md",
+      "sections": [
+        "2.1 Trace model",
+        "2.2 Mandatory attributes",
+        "5 Redaction",
+        "6 Error taxonomy",
+        "11 Test strategy"
+      ],
+      "reason": "Provider span attributes, upload/download URLs added to redaction, VA-PROV-007..013 added."
+    },
+    {
+      "doc": "docs/LLD/assembly.md",
+      "sections": [
+        "4.1 Normalise",
+        "8 Failure modes",
+        "9 Test strategy"
+      ],
+      "reason": "Canonical resolution follows MAGICHOUR_RESOLUTION rather than a hard-coded 1080p."
+    },
+    {
+      "doc": "docs/LLD/api.md",
+      "sections": [
+        "2.2 Models"
+      ],
+      "reason": "DeliveryManifest carries a reproducibility caveat."
+    },
+    {
+      "doc": "docs/LLD/planning.md",
+      "sections": [
+        "2.2 ContinuityBible"
+      ],
+      "reason": "resolution_ceiling clarified as a ceiling, not a delivery target."
+    },
+    {
+      "doc": "docs/LLD/graph.md",
+      "sections": [
+        "4 Checkpointing"
+      ],
+      "reason": "provider_project_id persisted at submit; resume re-reads rather than re-submits."
+    }
+  ],
+  "docs_updated": [
+    {
+      "path": "docs/HLD.md",
+      "lines": 611,
+      "bytes": 48379,
+      "sha256": "a63fa267e4705c545011d9d36a2d31532a36531aa7fbf4ded2009eabb998af79"
+    },
+    {
+      "path": "docs/LLD/providers.md",
+      "lines": 448,
+      "bytes": 29508,
+      "sha256": "dbaaa31a7319fd4cb37e433db9ae42b69b9e25e2a37b120b3e5e8e45746692a2"
+    },
+    {
+      "path": "docs/LLD/qc.md",
+      "lines": 246,
+      "bytes": 13647,
+      "sha256": "f8715e21f173083cf59d6157ea3c9c9de7f01a20564d123573a874c4cda72b92"
+    },
+    {
+      "path": "docs/LLD/persistence.md",
+      "lines": 343,
+      "bytes": 18678,
+      "sha256": "a9aa6de2d0147f0b69d1a24dd9c9290cabcf23cdae01692f8b6b5ab373b6bec3"
+    },
+    {
+      "path": "docs/LLD/api.md",
+      "lines": 279,
+      "bytes": 14236,
+      "sha256": "08e1ffb85fa27b7e6fbba5b00425c8bf44b7883eb5f1079db26218c6d797bcd6"
+    },
+    {
+      "path": "docs/LLD/observability.md",
+      "lines": 323,
+      "bytes": 18041,
+      "sha256": "1a6090c20785ff650415e6019be60d69e840c706cd9eea2c6a9ce27c94cd265f"
+    },
+    {
+      "path": "docs/LLD/assembly.md",
+      "lines": 212,
+      "bytes": 12874,
+      "sha256": "bd7efc27a6c28a2523d99d7d47a80c3e2113e6c2aae1eb5dfd41baf335b604d0"
+    },
+    {
+      "path": "docs/LLD/planning.md",
+      "lines": 252,
+      "bytes": 12814,
+      "sha256": "30288e77e9813e87c39cc0e0166fbd187fdcc9d79fdfe52fbf255e5a8f571761"
+    },
+    {
+      "path": "docs/LLD/harness.md",
+      "lines": 290,
+      "bytes": 15866,
+      "sha256": "6632a5e61318cd196386f9bfb60325c86c14d1bf1d0e51cb85748a9485df90f3"
+    },
+    {
+      "path": "docs/LLD/graph.md",
+      "lines": 303,
+      "bytes": 15626,
+      "sha256": "b0ceb07f19bed8890b7e25f9cce0020f8caeb8c54e37bd8056cea78266ba14e8"
+    },
+    {
+      "path": "README.md",
+      "lines": 162,
+      "bytes": 9463,
+      "sha256": "d1c020c31a0d2858dc9ec96fbcb574d2f36239c0218a0a45b02471b475d9234c"
+    },
+    {
+      "path": "AGENT.md",
+      "lines": 278,
+      "bytes": 14146,
+      "sha256": "031e8ec036bfea0392d93003ca996bcd3e43d1ba21ff3b03c53f30cb69e476ec"
+    }
+  ],
+  "docs_created": [],
+  "docs_unchanged": [
+    "docs/LLD/gateway.md"
+  ],
+  "specs_deliberately_unchanged": [
+    "docs/specs/common-platform-spec.md",
+    "docs/specs/video-agent-prd.md"
+  ],
+  "specs_unchanged_reason": "Verbatim transcriptions of the source PDFs. They must keep naming Higgsfield; the deviation is recorded as D-58 in the design docs, never by editing a spec.",
+  "decisions_added": [
+    "D-58",
+    "D-59",
+    "D-60",
+    "D-61",
+    "D-62",
+    "D-63",
+    "D-64"
+  ],
+  "decisions_superseded": [
+    {
+      "id": "D-30",
+      "by": "D-59"
+    }
+  ],
+  "decisions_amended": [
+    {
+      "id": "D-41",
+      "by": "D-59"
+    },
+    {
+      "id": "D-52",
+      "by": "D-58/D-64"
+    }
+  ],
+  "prd_promises_now_partially_unmet": [
+    {
+      "promise": "per-shot cost, model, seed and prompt - every job is reproducible",
+      "source": "PRD What's delivered",
+      "status": "partially unmet",
+      "detail": "Magic Hour documents no seed parameter. Traceability is delivered (model, prompt, cost, credits, provider project id); bit-exact re-rendering is not.",
+      "decision": "D-59",
+      "user_visible": true
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I1",
+      "statement": "Never leave a canonical doc half-written",
+      "held": true,
+      "evidence": "All edits applied as guarded exact-match replacements with a uniqueness assertion; one batch aborted before write on a failed guard and was re-run, leaving no file partially edited."
+    }
+  ],
+  "verification": {
+    "stale_provider_refs": 0,
+    "decision_refs_resolvable": {
+      "dangling": 0,
+      "unused": 0
+    },
+    "relative_links_resolvable": {
+      "broken": 0
+    },
+    "front_matter_untouched": true
+  },
+  "notes": [
+    "last_synced_commit deliberately left at the run-001 value; the coordinator re-stamps at commit time.",
+    "No git commit or push performed."
+  ]
+}

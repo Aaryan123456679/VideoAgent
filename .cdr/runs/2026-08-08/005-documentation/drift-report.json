@@ -1,0 +1,276 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/005-documentation",
+  "agent": "documentation",
+  "mode": "sync",
+  "git_head": "438138573aa69c26727651b368e056262908bc69",
+  "generated_at": "2026-08-08T00:00:00Z",
+  "baseline": {
+    "exists": true,
+    "run_id": "2026-08-08/002-documentation"
+  },
+  "drift_detected": true,
+  "drift_trigger": {
+    "kind": "upstream-decision",
+    "source": ".cdr/runs/2026-08-08/004-resolutions/RESOLUTIONS.md",
+    "summary": "Ten OPEN_QUESTIONS from planning run 003-planner resolved; folded into canonical docs as D-65..D-74. Build scope narrowed to E0+E1+E2."
+  },
+  "resolutions_applied": [
+    {
+      "q": "Q1",
+      "decision": "D-65",
+      "docs": [
+        "docs/LLD/providers.md",
+        "docs/LLD/harness.md",
+        "README.md"
+      ]
+    },
+    {
+      "q": "Q2",
+      "decision": "D-66",
+      "docs": [
+        "docs/LLD/qc.md"
+      ]
+    },
+    {
+      "q": "Q3",
+      "decision": "D-67",
+      "docs": [
+        "docs/LLD/graph.md",
+        "docs/LLD/persistence.md",
+        "docs/HLD.md"
+      ]
+    },
+    {
+      "q": "Q4",
+      "decision": "D-68",
+      "docs": [
+        "docs/LLD/api.md",
+        "docs/LLD/persistence.md",
+        "docs/HLD.md",
+        "AGENT.md"
+      ]
+    },
+    {
+      "q": "Q5",
+      "decision": "D-69",
+      "docs": [
+        "docs/LLD/assembly.md",
+        "docs/LLD/api.md"
+      ]
+    },
+    {
+      "q": "Q6",
+      "decision": "D-70",
+      "docs": [
+        "docs/LLD/persistence.md",
+        "docs/LLD/harness.md",
+        "AGENT.md"
+      ]
+    },
+    {
+      "q": "Q7",
+      "decision": "D-71",
+      "docs": [
+        "docs/LLD/qc.md",
+        "docs/LLD/api.md",
+        "AGENT.md"
+      ],
+      "note": "CONTRADICTED the existing doc. qc.md declared CONTINUITY_THRESHOLD Final and called it 'not a tunable'; both removed."
+    },
+    {
+      "q": "Q8",
+      "decision": "D-72",
+      "docs": [
+        "docs/LLD/observability.md",
+        "docs/LLD/planning.md",
+        "README.md"
+      ]
+    },
+    {
+      "q": "Q9",
+      "decision": "D-73",
+      "docs": [
+        "docs/HLD.md",
+        "docs/LLD/assembly.md"
+      ]
+    },
+    {
+      "q": "Q10",
+      "decision": "D-74",
+      "docs": [
+        "docs/LLD/api.md"
+      ]
+    }
+  ],
+  "planner_confirmations_folded": [
+    {
+      "topic": "D-34 static capability profile + startup duration validation",
+      "doc": "docs/LLD/providers.md",
+      "register": "D-34 amended"
+    },
+    {
+      "topic": "shot 0 always routes to text-to-video, including on repair",
+      "doc": "docs/LLD/providers.md"
+    }
+  ],
+  "scope_marking": {
+    "target": "E0 + E1 + E2",
+    "deferred": [
+      "E3",
+      "E4"
+    ],
+    "mechanism": "implementation_status front-matter field plus a status callout at the top of all 10 LLDs; scope table and callout in HLD section 12; status note and per-module epic column in README; a build-scope rule in AGENT.md.",
+    "wholly_deferred_modules": [
+      "qc (E3)",
+      "observability (E4)"
+    ]
+  },
+  "decisions_added": [
+    "D-65",
+    "D-66",
+    "D-67",
+    "D-68",
+    "D-69",
+    "D-70",
+    "D-71",
+    "D-72",
+    "D-73",
+    "D-74"
+  ],
+  "decisions_superseded": [
+    {
+      "id": "qc.md CONTINUITY_THRESHOLD constant",
+      "by": "D-71"
+    }
+  ],
+  "decisions_amended": [
+    {
+      "id": "D-34",
+      "by": "planner confirmation"
+    },
+    {
+      "id": "D-39",
+      "by": "D-71"
+    },
+    {
+      "id": "D-48",
+      "by": "D-69"
+    }
+  ],
+  "already_superseded_confirmed": [
+    {
+      "id": "D-30",
+      "by": "D-59",
+      "note": "superseded in run 002; re-verified, no change needed"
+    }
+  ],
+  "docs_updated": [
+    {
+      "path": "docs/HLD.md",
+      "lines": 658,
+      "bytes": 56177,
+      "sha256": "06409ecf62fe8cfc4d0faf1f1e2366d7bdabd62c719db2f92ff32b97b2967897"
+    },
+    {
+      "path": "docs/LLD/api.md",
+      "lines": 327,
+      "bytes": 17459,
+      "sha256": "b76ae1153928d72328e741a55de76f8663a02d58e4d2ba0b736e440c76f6f800"
+    },
+    {
+      "path": "docs/LLD/harness.md",
+      "lines": 300,
+      "bytes": 16924,
+      "sha256": "71e101c65e3ba952952b68f6569922492bef86e227c12a6cb32430f810c3c63e"
+    },
+    {
+      "path": "docs/LLD/gateway.md",
+      "lines": 240,
+      "bytes": 12318,
+      "sha256": "92901ddecb6149bab52cd6c5b1d06c57b6be480ae96690033d1b60e57625048e"
+    },
+    {
+      "path": "docs/LLD/graph.md",
+      "lines": 328,
+      "bytes": 17484,
+      "sha256": "58f32b3e45bdb13c9380aa61b3f321306774bdb0bffe18b825d8556fcccff364"
+    },
+    {
+      "path": "docs/LLD/planning.md",
+      "lines": 260,
+      "bytes": 13384,
+      "sha256": "da69f297d173210b3394bed8217487a568cc824aef24ae103bee883f51b0dde7"
+    },
+    {
+      "path": "docs/LLD/providers.md",
+      "lines": 469,
+      "bytes": 31474,
+      "sha256": "7fc34f2e49528434a111567e0da59559f44028a972b91c5b7a8db7bd8572b8b6"
+    },
+    {
+      "path": "docs/LLD/qc.md",
+      "lines": 282,
+      "bytes": 16480,
+      "sha256": "d4b2a962e53c3fb160959e7b5d9c27ee3e46300a15ca30c9bcd569727b706dc1"
+    },
+    {
+      "path": "docs/LLD/assembly.md",
+      "lines": 227,
+      "bytes": 14423,
+      "sha256": "941f921e71d44a45294c591c9db471ac45d86d83ed63274fee9cadd721b554b0"
+    },
+    {
+      "path": "docs/LLD/persistence.md",
+      "lines": 413,
+      "bytes": 24015,
+      "sha256": "cf7eaf99a21db328dd52bc109bdeb2f9be67f4d922f3782e7f18f6e121d50d87"
+    },
+    {
+      "path": "docs/LLD/observability.md",
+      "lines": 346,
+      "bytes": 20134,
+      "sha256": "0888f024facc53ffa23b5999dd92c069b08b6f9ad8de614c2c8ce538516475de"
+    },
+    {
+      "path": "README.md",
+      "lines": 172,
+      "bytes": 10612,
+      "sha256": "59eec4ef589850af149e39df3ca0e7b1c1f0fd1998c223d65495d1dd586a1c33"
+    },
+    {
+      "path": "AGENT.md",
+      "lines": 300,
+      "bytes": 15892,
+      "sha256": "02835aa14786512d2fbc5da45dd65c8a9f77c1b70422653872834d2f4e7bd27b"
+    }
+  ],
+  "docs_created": [],
+  "specs_deliberately_unchanged": [
+    "docs/specs/common-platform-spec.md",
+    "docs/specs/video-agent-prd.md"
+  ],
+  "invariants": [
+    {
+      "id": "I1",
+      "statement": "Never leave a canonical doc half-written",
+      "held": true,
+      "evidence": "All edits applied as guarded exact-match replacements with uniqueness assertions; two batches aborted before write on a failed guard (qc.md, AGENT.md) and were re-run against corrected patterns, leaving no file partially edited."
+    }
+  ],
+  "verification": {
+    "decision_refs_resolvable": {
+      "dangling": 0,
+      "unused": 0
+    },
+    "relative_links_resolvable": {
+      "broken": 0
+    },
+    "front_matter_last_synced_commit_untouched": true,
+    "implementation_status_present_on_all_llds": 10
+  },
+  "notes": [
+    "last_synced_commit deliberately left at the run-001 value; the coordinator re-stamps at commit time.",
+    "No git commit or push performed. docs/specs/* untouched."
+  ]
+}
