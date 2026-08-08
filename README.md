@@ -98,9 +98,11 @@ stateDiagram-v2
     qc_shot --> select_next_shot : accepted / abandoned
     qc_shot --> generate_shot : repair, capped at 2 attempts
     note right of qc_shot
-        Repair edge is designed but not
-        wired live yet (E3) — currently an
-        unconditional-accept stub
+        Real scoring is still E3 (deferred);
+        qc_shot accepts every shot by default.
+        The repair edge is reachable today only
+        via a manual override (force-repair),
+        never from QC's own judgment
     end note
     assemble --> deliver
     deliver --> finalize
