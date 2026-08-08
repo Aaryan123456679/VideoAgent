@@ -1,0 +1,13 @@
+# Prompt registry manifest. `[D-72]`: prompts are authored in-repo under `prompts/`, versioned
+# files, and this manifest — not Langfuse, not an inline string — is the source of truth for
+# which version a job runs under.
+#
+# Each entry names the `production` version that serves by default. A `canary` block is the
+# shape for a rollout in progress; none is declared today because starting a rollout is a
+# decision with a cost and is not made by leaving an example uncommented.
+
+prompts:
+  story_plan:
+    production: v1
+  continuity_bible:
+    production: v1

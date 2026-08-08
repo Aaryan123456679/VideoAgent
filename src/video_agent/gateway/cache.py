@@ -19,6 +19,13 @@ yesterday's shape into today's model.
 
 **A hit is flagged.** `degraded=true`, reason `cache`. `gateway.md` §4.4 again: *a degraded
 result is never presented as a clean one.*
+
+**The key and its TTL come from the registry, not from here.** `persistence.keys` is the one
+place a Redis key pattern is spelled `[persistence.md §5]`, and `T0.6` shipped a scanner that
+fails the build on an ad-hoc key literal anywhere under `src/`. This module used to declare
+`cache:llm:` and a second `3600` of its own; both now render through
+`persistence.keys.llm_cache_key`, so a namespace change is one edit and the 1h TTL cannot drift
+away from the entry an operator reads in the LLD table.
 """
 
 from __future__ import annotations
@@ -28,41 +35,54 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+from video_agent.persistence.keys import LLM_CACHE_TTL_SECONDS, RedisKey, llm_cache_key
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Mapping
 
     from video_agent.gateway.models import LLMRequest
 
 __all__ = [
-    "CACHE_KEY_PREFIX",
     "CACHE_TTL_SECONDS",
     "NEVER_CACHED_PROMPTS",
     "CachedResponse",
     "InMemoryResponseCache",
     "RedisResponseCache",
     "ResponseCacheStore",
+    "cache_entry",
     "cache_key",
     "is_cacheable",
 ]
 
-CACHE_KEY_PREFIX: Final = "cache:llm:"
-"""`persistence.md` §5's key registry namespace for this cache. One prefix, so an operator can
-scope a flush to it without touching idempotency records, which may never be flushed."""
+CACHE_TTL_SECONDS: Final[int] = LLM_CACHE_TTL_SECONDS
+"""One hour `[gateway.md §4.4]`, and the registry's number rather than a second copy of it.
 
-CACHE_TTL_SECONDS: Final = 3600
-"""One hour `[gateway.md §4.4]`."""
+A binding, not a value. `ResponseCacheStore.set` takes the TTL as an argument because its
+in-memory implementation has no Redis to carry one, so the gateway needs a name to pass — but
+the number behind that name is `KEY_REGISTRY[KeyName.LLM_CACHE].ttl_seconds`, and re-typing
+`3600` here is exactly the drift the registry exists to make impossible.
+"""
 
 NEVER_CACHED_PROMPTS: Final[frozenset[str]] = frozenset(
-    {"plan_story", "lock_bible", "story_plan", "continuity_bible"}
+    {"story_plan", "continuity_bible", "plan_story", "lock_bible"}
 )
 """The prompts that must be freshly derived, on both read and write.
 
-Four names for two calls, and that is deliberate rather than sloppy. `gateway.md` §4.4 names
-them `plan_story` and `lock_bible`; the delivery plan's `S0.7.8` names the same two calls
-`story_plan` and `continuity_bible`. The documents disagree and the disagreement is unresolved,
-so both spellings are excluded: excluding a name that turns out not to exist costs one cache
-miss that never happens, while omitting the spelling that turns out to be real would cache the
-bible. The asymmetry decides it. This should be reconciled to one pair of names.
+**The prompt names are `story_plan` and `continuity_bible`**, and that is now settled rather
+than hedged. `observability.md` §3 tabulates the four prompts by name and gives their
+consumers: prompt `story_plan` is consumed by `planning.plan_story`, prompt `continuity_bible`
+by `planning.lock_bible`. `planning.md` §3.1 says the same in the other direction — *the prompt
+is `prompts/story_plan/<version>.md`* — and `prompts/` on disk is authored under those two
+names. `plan_story` and `lock_bible` are the **node** names, from `graph.md` §108 and
+`harness.md` §139's tool-grant table. `gateway.md` §4.4 and §9 put the node names in a column
+whose other entries are prompt names; that is the document to amend, and it is the only place
+the contradiction survives.
+
+The two node names stay in the set anyway, and the reason is unchanged from when the names were
+genuinely ambiguous: `is_cacheable` is called with whatever string a caller passes, the cost of
+excluding a name nobody passes is one cache miss that never happens, and the cost of the other
+error is a continuity bible derived from a previous job's inputs. Retaining them is cheap
+insurance against a caller that passes the node name; it is no longer a refusal to choose.
 """
 
 
@@ -208,11 +228,15 @@ def variables_digest(variables: Mapping[str, Any], untrusted: Mapping[str, str])
     return digest.hexdigest()
 
 
-def cache_key(request: LLMRequest) -> str:
-    """The cache key for one request: prompt identity, inputs, and the shape asked for.
+def cache_entry(request: LLMRequest) -> RedisKey:
+    """The registry key for one request: prompt identity, inputs, and the shape asked for.
 
     `max_output_tokens` and `temperature` are in the key because both change the answer, and a
     key that ignored them would serve a 200-token answer to a caller that asked for 2,000.
+
+    Returns the `RedisKey` rather than the string because that is what carries the TTL. A
+    caller holding one cannot write it without an expiry — `persistence.redis_client.require_ttl`
+    refuses — which is the property `persistence.md` §5 is actually after.
     """
     schema_name = request.response_model.__name__ if request.response_model is not None else ""
     material = "|".join(
@@ -226,4 +250,15 @@ def cache_key(request: LLMRequest) -> str:
             variables_digest(request.variables, request.untrusted),
         )
     )
-    return CACHE_KEY_PREFIX + hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return llm_cache_key(hashlib.sha256(material.encode("utf-8")).hexdigest())
+
+
+def cache_key(request: LLMRequest) -> str:
+    """The same key as the string `ResponseCacheStore` protocol takes.
+
+    A thin unwrap and not a second rendering: the string is `cache_entry(request).value`, so
+    there is still exactly one place that knows how a cache key is spelled. The protocol is
+    string-keyed because its in-memory implementation is a `dict` in a test, and a protocol that
+    demanded a `RedisKey` would drag the registry into every fake.
+    """
+    return cache_entry(request).value

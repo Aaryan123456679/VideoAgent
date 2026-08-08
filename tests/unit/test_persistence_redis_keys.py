@@ -288,13 +288,7 @@ def test_the_scanner_ignores_a_key_rendered_through_a_constructor() -> None:
     assert adhoc_key_literals(source, "probe.py") == []
 
 
-PENDING_REGISTRY_ADOPTION: dict[str, str] = {
-    "src/video_agent/gateway/cache.py": (
-        "T0.7 declares CACHE_KEY_PREFIX = 'cache:llm:' rather than rendering the key with "
-        "video_agent.persistence.keys.llm_cache_key. Two definitions of one pattern, and the "
-        "registry is the one that also carries the 1h TTL."
-    ),
-}
+PENDING_REGISTRY_ADOPTION: dict[str, str] = {}
 """Modules that build a registered key by hand today, each with the reason and the owning task.
 
 Exact paths, never a directory or a pattern, so nothing inherits the exemption by living next
@@ -332,7 +326,7 @@ def test_no_unexempted_adhoc_key_literal_in_src(repo_root: Path) -> None:
 
 def test_the_exemption_list_is_exactly_the_one_known_module() -> None:
     """It may not grow silently."""
-    assert set(PENDING_REGISTRY_ADOPTION) == {"src/video_agent/gateway/cache.py"}
+    assert set(PENDING_REGISTRY_ADOPTION) == set()
 
 
 @pytest.mark.parametrize("path", sorted(PENDING_REGISTRY_ADOPTION))

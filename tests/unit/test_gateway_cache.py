@@ -26,7 +26,6 @@ from tests.gateway_doubles import (
 )
 from video_agent.gateway import CallContext, DegradeReason
 from video_agent.gateway.cache import (
-    CACHE_KEY_PREFIX,
     CACHE_TTL_SECONDS,
     NEVER_CACHED_PROMPTS,
     CachedResponse,
@@ -104,7 +103,6 @@ def test_the_cache_key_is_stable_for_an_identical_call() -> None:
     two = a_request(prompt_ref=PromptRef(name="qc_shot", version="v1"))
     assert cache_key(one) == cache_key(two)
     assert cache_key(one).startswith(SPEC_KEY_PREFIX)
-    assert CACHE_KEY_PREFIX == SPEC_KEY_PREFIX
 
 
 def test_a_schema_change_invalidates_via_the_prompt_version() -> None:
