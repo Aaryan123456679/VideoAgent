@@ -44,6 +44,13 @@ class Capability(StrEnum):
     NEGATIVE_PROMPT = "negative_prompt"
     CAMERA_DIRECTIVE = "camera_directive"
     ASPECT_16_9 = "aspect_16_9"
+    RES_480P = "res_480p"
+    """Temporary account-tier accommodation, not a product quality floor. The PRD's quality bar
+    is 720p; this exists only because the account behind the concrete `VideoProvider` adapter
+    used for the first real end-to-end validation is tier-gated below it (`720p` returned "not
+    available for your subscription tier"). Revert `graph.nodes._required_capabilities`'s floor
+    to `RES_720P` once validating against a properly-tiered account/key — this member and that
+    revert should travel together."""
     RES_720P = "res_720p"
     RES_1080P = "res_1080p"
     DURATION_10S = "duration_10s"
@@ -93,7 +100,8 @@ class ShotRequest(BaseModel):
     conditioning_frame: ArtifactRef | None = None
     duration_s: float = 10.0
     aspect_ratio: Literal["16:9"] = "16:9"
-    resolution: Literal["720p", "1080p"] = "720p"
+    resolution: Literal["480p", "720p", "1080p"] = "720p"
+    """`"480p"` is a temporary account-tier accommodation — see `Capability.RES_480P`."""
     seed: int | None = None
     request_fingerprint: str = Field(min_length=1)
     timeout_s: float = Field(gt=0)

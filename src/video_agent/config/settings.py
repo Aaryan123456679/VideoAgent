@@ -73,7 +73,9 @@ class Settings(BaseSettings):
     MAGICHOUR_MODEL: str = "wan-2.2"
     # 1080p is a hard ceiling: nothing above it is offered at the 10s clip length v1 needs,
     # and a higher value would be accepted by the provider only to be billed and refused.
-    MAGICHOUR_RESOLUTION: Literal["720p", "1080p"] = "720p"
+    # "480p" is a temporary account-tier accommodation, not a product option — see
+    # providers.models.Capability.RES_480P's docstring for why it exists and when to remove it.
+    MAGICHOUR_RESOLUTION: Literal["480p", "720p", "1080p"] = "720p"
     MAGICHOUR_WEBHOOK_SECRET: SecretStr = SecretStr("")
     # Undiscounted list rate for the account's tier. See the module docstring and [D-65].
     MAGICHOUR_USD_PER_1K_CREDITS: Decimal = Field(default=Decimal("0.90"), gt=0)

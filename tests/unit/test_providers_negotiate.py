@@ -13,7 +13,24 @@ from tests.providers_doubles import (
 from video_agent.gateway.models import ArtifactRef
 from video_agent.providers.errors import NoProviderSatisfiesCapabilitiesError
 from video_agent.providers.models import Capability
-from video_agent.providers.negotiate import negotiate, select_providers
+from video_agent.providers.negotiate import negotiate, required_for, select_providers
+
+
+@pytest.mark.parametrize(
+    ("resolution", "expected"),
+    [
+        ("480p", Capability.RES_480P),
+        ("720p", Capability.RES_720P),
+        ("1080p", Capability.RES_1080P),
+    ],
+)
+def test_required_for_maps_each_resolution_to_its_own_capability(
+    resolution: str, expected: Capability
+) -> None:
+    """A request for one resolution must never be satisfiable by a provider declaring another —
+    the bug this guards against sent every non-1080p request through a hardcoded 720p check."""
+    shot = a_shot_request(resolution=resolution)
+    assert expected in required_for(shot)
 
 
 def test_negotiate_picks_providers_that_satisfy_all_required_capabilities() -> None:

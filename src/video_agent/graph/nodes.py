@@ -22,7 +22,7 @@ import tempfile
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from video_agent.assembly.media_toolchain import build_thumbnail, concat_clips, normalize_clip
 from video_agent.assembly.models import DeliveryManifest, ManifestEntry
@@ -315,6 +315,12 @@ _SHOT_CLIP_CONTENT_TYPE = "video/mp4"
 _CONTINUITY_FRAME_CONTENT_TYPE = "image/png"
 """`[D-44]`: every continuity anchor is lossless PNG."""
 
+_TEMP_RESOLUTION_FLOOR: Literal["480p"] = "480p"
+"""Temporary account-tier accommodation, not the product floor (720p) — see
+`providers.models.Capability.RES_480P`'s docstring. This constant and the capability it pairs
+with (`Capability.RES_480P` below) should be reverted together once validating against a
+properly-tiered account/key."""
+
 
 def _required_capabilities(*, conditioning_frame_present: bool) -> frozenset[Capability]:
     """`providers.md` §3's negotiation table, inlined rather than called through
@@ -322,7 +328,7 @@ def _required_capabilities(*, conditioning_frame_present: bool) -> frozenset[Cap
     and this needs the answer *before* the prompt (and therefore the request) exists — the
     provider's `max_prompt_chars` is itself an input to composing the prompt.
     """
-    required = {Capability.DURATION_10S, Capability.ASPECT_16_9, Capability.RES_720P}
+    required = {Capability.DURATION_10S, Capability.ASPECT_16_9, Capability.RES_480P}
     if conditioning_frame_present:
         required.add(Capability.IMAGE_CONDITIONING)
     return frozenset(required)
@@ -550,6 +556,7 @@ async def generate_shot_node(state: JobState, deps: GraphDeps) -> dict[str, Any]
         prompt=composed.text,
         conditioning_frame=conditioning_ref,
         duration_s=beat.duration_s,
+        resolution=_TEMP_RESOLUTION_FLOOR,
         request_fingerprint=fingerprint,
         timeout_s=_PROVIDER_TIMEOUT_S,
     )

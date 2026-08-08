@@ -30,10 +30,17 @@ REQUIRED_ALWAYS: frozenset[Capability] = frozenset(
 _WAIVABLE: frozenset[Capability] = frozenset({Capability.NEGATIVE_PROMPT})
 
 
+_RESOLUTION_CAPABILITY: dict[str, Capability] = {
+    "480p": Capability.RES_480P,
+    "720p": Capability.RES_720P,
+    "1080p": Capability.RES_1080P,
+}
+
+
 def required_for(shot: ShotRequest) -> frozenset[Capability]:
     """The capabilities `shot` needs, per `providers.md` §3's negotiation table."""
     required = set(REQUIRED_ALWAYS)
-    required.add(Capability.RES_1080P if shot.resolution == "1080p" else Capability.RES_720P)
+    required.add(_RESOLUTION_CAPABILITY[shot.resolution])
     if shot.conditioning_frame is not None:
         required.add(Capability.IMAGE_CONDITIONING)
     if shot.negative_prompt:

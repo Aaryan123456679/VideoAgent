@@ -513,6 +513,9 @@ def _build_profile(settings: Settings) -> ProviderProfile:
     }
     if settings.MAGICHOUR_RESOLUTION == "1080p":
         capabilities.add(Capability.RES_1080P)
+    if settings.MAGICHOUR_RESOLUTION == "480p":
+        # Temporary account-tier accommodation — see Capability.RES_480P's docstring.
+        capabilities.add(Capability.RES_480P)
 
     credits_per_second = _MODEL_CREDITS_PER_SECOND.get(model, _DEFAULT_CREDITS_PER_SECOND)
     price_per_second = credits_per_second * settings.usd_per_credit

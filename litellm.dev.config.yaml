@@ -1,0 +1,37 @@
+# Minimal LiteLLM proxy config for the local dev stack (docker-compose.dev.yml).
+#
+# Without a model_list, the proxy has nothing to report from /model/info and every completion
+# call 404s/500s — `config/aliases.yaml`'s alias table names the models this application calls
+# by; this file is what makes the *proxy* actually serve them locally.
+#
+# All fallback members of every alias group are declared here too, even the ones with no real
+# credential in this dev environment (openai/*, anthropic/*): the gateway's capability check
+# reads /model/info for the whole group before picking a candidate, and litellm reports a
+# model's capabilities from its static internal cost/capability map by name alone — no working
+# key is needed for that lookup, only for an actual completion, which this dev setup never
+# routes to them for (the Gemini primary is weight: 100 in every group it's in).
+model_list:
+  - model_name: gemini/gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+  - model_name: gemini/gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+  - model_name: gemini/gemini-2.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: "unset-dev-placeholder"
+  - model_name: openai/gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: "unset-dev-placeholder"
+  - model_name: anthropic/claude-sonnet-4-20250514
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: "unset-dev-placeholder"
+
+litellm_settings:
+  drop_params: true

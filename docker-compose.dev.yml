@@ -75,12 +75,14 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-v1.65.0-stable
     container_name: video-agent-litellm
-    command: ["--port", "4000", "--num_workers", "1"]
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000", "--num_workers", "1"]
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - ./litellm.dev.config.yaml:/etc/litellm/config.yaml:ro
     ports:
       - "4000:4000"
     depends_on:
