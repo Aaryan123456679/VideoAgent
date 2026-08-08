@@ -121,6 +121,9 @@ def _job_row(**overrides: object) -> dict[str, Any]:
         "request_fingerprint": "fp-1",
         "status": "queued",
         "trace_id": "trace-1",
+        "prompt": "a cat",
+        "music_bed": False,
+        "budget_caps": {},
         "budget_epoch": 0,
     }
     row.update(overrides)

@@ -71,6 +71,9 @@ class JobRecord:
     request_fingerprint: str
     status: JobStatus
     trace_id: str
+    prompt: str
+    music_bed: bool
+    budget_caps: dict[str, Any]
     budget_epoch: int
     created: bool
     """False when this call adopted a job an earlier identical request had already created."""
@@ -678,6 +681,9 @@ _JOB_COLUMNS = (
     job.c.request_fingerprint,
     job.c.status,
     job.c.trace_id,
+    job.c.prompt,
+    job.c.music_bed,
+    job.c.budget_caps,
     job.c.budget_epoch,
 )
 _PLAN_COLUMNS = (
@@ -747,6 +753,9 @@ def _job_record(row: RowMapping, *, created: bool) -> JobRecord:
         request_fingerprint=row["request_fingerprint"],
         status=JobStatus(row["status"]),
         trace_id=row["trace_id"],
+        prompt=row["prompt"],
+        music_bed=row["music_bed"],
+        budget_caps=row["budget_caps"],
         budget_epoch=row["budget_epoch"],
         created=created,
     )
