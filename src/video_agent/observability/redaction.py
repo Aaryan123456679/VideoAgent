@@ -21,7 +21,11 @@ secret, which is exactly the fact worth not publishing.
    consulted, so widening the allow-list cannot accidentally admit one.
 2. *Value shape.* A credential does not stop being a credential because it was filed under an
    innocuous key. High-entropy tokens, known issuer prefixes, URLs carrying query-string auth,
-   and media magic bytes — raw, base64-encoded or in a data URI — are dropped on sight.
+   and media magic bytes — raw, base64-encoded or in a data URI — are dropped on sight. The
+   shape rules are applied to substrings found **anywhere** in a value, not only to the value
+   and its whitespace-separated words: a leading `=`, `'`, `<`, `(` or `[` is the difference
+   between `log.info("uploading %s", url)` and `log.info("url=%s", url)`, and an anchored
+   detector reads the second as prose. See `credential_candidates`.
 3. *The tripwire.* The scan runs over the **whole** payload, including the parts the
    allow-list would have dropped anyway, because the interesting fact is not that the secret
    was filtered but that something handed it to the logging system at all. In dev and CI that
@@ -109,6 +113,7 @@ class FieldKind(StrEnum):
     BOOLEAN = "boolean"
     TIMESTAMP = "timestamp"
     PROMPT = "prompt"
+    PREVIEW = "preview"
     NESTED = "nested"
 
 
@@ -169,7 +174,12 @@ ALLOWED_FIELDS: Final[Mapping[str, FieldKind]] = {
     # The user prompt, and only in the form §5 permits.
     "prompt": FieldKind.PROMPT,
     "prompt_sha256": FieldKind.HASH,
-    "prompt_preview": FieldKind.TEXT,
+    # PREVIEW, not TEXT. `summarise_prompt` is the intended producer and truncates correctly,
+    # but the allow-list has to hold for the caller who passes the field directly — under TEXT
+    # that caller got `MAX_TEXT_CHARS` of raw prompt, sixteen times the window §5 permits, and
+    # the canary could not see it because the canary only inspects previews the `prompt` path
+    # produced.
+    "prompt_preview": FieldKind.PREVIEW,
 }
 """Every field that may be emitted, and what it may hold.
 
@@ -206,6 +216,12 @@ CREDENTIAL_KEY_SEGMENTS: Final[frozenset[str]] = frozenset(
         "auth",
         "apikey",
         "signature",
+        # A signature separated from its URL is the one credential the shape rules cannot see:
+        # an AWS SigV4 signature is 64 lowercase hex characters, which is character-for-
+        # character a SHA-256 digest, and digests are load-bearing allow-listed values. The
+        # name is all that is left to go on. `SIGNATURE_QUERY_PARAMS` already knew this
+        # abbreviation; the name rule did not.
+        "sig",
         "cookie",
         "dsn",
         "bearer",
@@ -332,9 +348,24 @@ ISO_BMFF_HEADER_BYTES: Final = 8
 
 MIN_SECRET_LENGTH: Final = 24
 MIN_SECRET_ENTROPY: Final = 3.5
+MIN_PATH_SEGMENTS: Final = 2
+"""Below this, `/a/bcdef...` is a token with a slash in it rather than a directory tree."""
 _SECRET_CHARSET: Final = re.compile(r"^[A-Za-z0-9+/=_.~-]+$")
 _URL_SCHEME_RE: Final = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 _BASE64_RE: Final = re.compile(r"^[A-Za-z0-9+/]{16,}={0,2}$")
+MIN_AUTHORIZATION_PARAMETER_LENGTH: Final = 16
+_AUTHORIZATION_SCHEME_RE: Final = re.compile(
+    rf"(?:^|[^A-Za-z])(?:bearer|basic)\s+[A-Za-z0-9+/=_.~-]{{{MIN_AUTHORIZATION_PARAMETER_LENGTH},}}",
+    re.IGNORECASE,
+)
+"""An HTTP `Authorization` header value, anywhere in a string.
+
+The scheme word alone would be hopeless — *the basic idea* and *bearer of bad news* are
+ordinary English — so the credential itself has to be present for this to fire: sixteen or
+more characters of the credential charset immediately after the scheme. `has_known_credential_
+prefix` only sees the two schemes when they open the string, and a header is almost never
+logged that way; it is logged as `Authorization: Bearer ...` in the middle of a sentence.
+"""
 _BYTES_REPR_RE: Final = re.compile(r"""^b['"]""")
 """`str(some_bytes)` produces `b'...'`. That is a payload wearing a text costume: the magic
 bytes are backslash-escaped, so every byte-level check misses it while the content is intact."""
@@ -349,14 +380,14 @@ def shannon_entropy(value: str) -> float:
     return -sum((count / total) * log2(count / total) for count in Counter(value).values())
 
 
-def looks_like_secret(token: str) -> bool:
-    """Whether a bare token has the shape of a generated credential.
+def _has_credential_shape(token: str) -> bool:
+    """Length, charset, mixed character classes and entropy — the four conditions together.
 
-    Four conditions together, because each alone has an obvious false positive. Length and
-    entropy alone flag UUIDs and hex digests; the mixed-case-and-digit requirement is what
-    separates a base64-ish generated secret from an identifier, since hex ids and UUIDs have
-    no uppercase and English words have no digits. The charset check keeps ordinary prose out
-    by construction — a credential has no spaces or punctuation in it.
+    Each alone has an obvious false positive. Length and entropy alone flag UUIDs and hex
+    digests; the mixed-case-and-digit requirement is what separates a base64-ish generated
+    secret from an identifier, since hex ids and UUIDs have no uppercase and English words have
+    no digits. The charset check keeps ordinary prose out by construction — a credential has no
+    spaces or punctuation in it.
     """
     if len(token) < MIN_SECRET_LENGTH or not _SECRET_CHARSET.match(token):
         return False
@@ -368,13 +399,53 @@ def looks_like_secret(token: str) -> bool:
     return shannon_entropy(token) >= MIN_SECRET_ENTROPY
 
 
+def is_filesystem_path(token: str) -> bool:
+    """Whether a token is an absolute path whose every segment is innocuous.
+
+    A deep absolute path satisfies every condition `_has_credential_shape` tests — `/` is in
+    the base64 charset, so `/private/var/folders/9k/T/pytest-of-me/...` is long, mixed-case,
+    digit-bearing and high-entropy. Measuring the concatenation measures the depth of the
+    directory tree, not the randomness of anything in it, and the cost of getting this wrong is
+    real: the tripwire *raises* outside production, so a deployment whose config happened to
+    live at a busy path would refuse to start.
+
+    Judged by segments rather than exempted outright, so a secret that merely begins with a
+    slash is still caught — a base64 blob's `/`-separated pieces are themselves long and
+    random, and any one of them failing this test disqualifies the whole token from the
+    exemption.
+    """
+    if not token.startswith("/"):
+        return False
+    segments = [segment for segment in token.split("/") if segment]
+    if len(segments) < MIN_PATH_SEGMENTS:
+        return False
+    return not any(_has_credential_shape(segment) for segment in segments)
+
+
+def looks_like_secret(token: str) -> bool:
+    """Whether a bare token has the shape of a generated credential."""
+    return _has_credential_shape(token) and not is_filesystem_path(token)
+
+
 def has_known_credential_prefix(value: str) -> bool:
-    """Whether a string starts with an issuer prefix that identifies it as a secret."""
+    """Whether a string starts with an issuer prefix that identifies it as a secret.
+
+    A `startswith` test, and it stays one: `sk-` searched for anywhere would fire on `task-`,
+    and a rule that deletes every log line containing the word *task* does not survive
+    contact with a sprint. Reaching the secret that sits *inside* a longer string is the job of
+    `credential_candidates`, which cuts the string at the characters a credential cannot
+    contain and offers each piece here with its own start.
+    """
     stripped = value.strip()
     lowered = stripped.lower()
     return stripped.startswith(KNOWN_CREDENTIAL_PREFIXES) or lowered.startswith(
         CASE_INSENSITIVE_CREDENTIAL_PREFIXES
     )
+
+
+def contains_authorization_scheme(value: str) -> bool:
+    """Whether an HTTP `Authorization` header value appears anywhere in the string."""
+    return bool(_AUTHORIZATION_SCHEME_RE.search(value))
 
 
 def is_presigned_url(value: str) -> bool:
@@ -399,8 +470,25 @@ def is_presigned_url(value: str) -> bool:
     return False
 
 
+MIN_USERINFO_PASSWORD_LENGTH: Final = 6
+_BARE_USERINFO_RE: Final = re.compile(
+    r"(?:^|[^A-Za-z0-9._+-])"
+    r"[A-Za-z0-9._+-]{0,64}:"
+    rf"[^\s:@/]{{{MIN_USERINFO_PASSWORD_LENGTH},}}"
+    r"@[A-Za-z0-9._-]+:\d{2,5}"
+)
+"""`user:password@host:port` with the scheme stripped off.
+
+A connection string reassembled by hand — `f"{user}:{password}@{host}:{port}"` in an error
+message — has no scheme for `urlsplit` to find, so the rule above cannot see it. The trailing
+`:port` is what keeps this from firing on ordinary prose: `handler:process_job@worker.py` has
+the same shape up to the host and is a perfectly normal thing to log, while a numeric port
+after the host is a connection target and essentially nothing else.
+"""
+
+
 def is_credentialed_url(value: str) -> bool:
-    """Whether a string is a URL carrying a password in its userinfo.
+    """Whether a string carries a password in URL userinfo, with or without a scheme.
 
     `postgresql+asyncpg://user:hunter2@host/db` is the shape, and `AGENT.md` §3 names DB URLs
     on the never-logged list for the obvious reason. The presigned-URL rule does not catch it:
@@ -408,10 +496,11 @@ def is_credentialed_url(value: str) -> bool:
     the entropy check considers, so a connection string sails through every other detector.
     """
     stripped = value.strip()
-    if not _URL_SCHEME_RE.match(stripped):
-        return False
-    userinfo = urlsplit(stripped).netloc.rpartition("@")[0]
-    return ":" in userinfo
+    if _URL_SCHEME_RE.match(stripped):
+        userinfo = urlsplit(stripped).netloc.rpartition("@")[0]
+        if ":" in userinfo:
+            return True
+    return bool(_BARE_USERINFO_RE.search(value))
 
 
 def _has_media_magic(raw: bytes) -> bool:
@@ -512,6 +601,11 @@ _STRING_DETECTORS: Final[tuple[tuple[Callable[[str], bool], HitKind, str], ...]]
         HitKind.CREDENTIALED_URL,
         "value is a URL carrying a password in its userinfo",
     ),
+    (
+        contains_authorization_scheme,
+        HitKind.KNOWN_KEY_PREFIX,
+        "value contains an HTTP Authorization header value",
+    ),
     (has_known_credential_prefix, HitKind.KNOWN_KEY_PREFIX, "value has a known issuer prefix"),
     (looks_like_secret, HitKind.CREDENTIAL_SHAPE, "value has the shape of a generated credential"),
 )
@@ -522,21 +616,87 @@ accidentally shadow the one above it. Order decides only which *name* a hit is r
 under, since any one of them is already fatal.
 """
 
+_URL_IN_TEXT_RE: Final = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s]+")
+"""A URL starting anywhere in a string, not only at character zero."""
+
+_URL_TRAILING_DELIMITERS: Final = "\"'`<>()[]{},;"
+"""Characters that end a quoted or bracketed URL rather than belonging to it.
+
+Trimmed from the right only. Trimming can shorten a signature but never lengthen one, so the
+worst case is a *shorter* credential offered to the detectors — and every detector that matters
+here keys on the parameter's name or on the URL's scheme, neither of which the trim can reach.
+"""
+
+_CREDENTIAL_RUN_RE: Final = re.compile(r"[A-Za-z0-9+/=_.~-]+")
+"""A maximal run of characters a generated credential is made of.
+
+The complement of this class — quotes, brackets, spaces, `:`, `@`, `,`, `%` — is exactly the
+punctuation that wraps a credential when it is printed inside something larger, so cutting at
+those characters lifts the credential back out of `Cfg(api_key='sk-...')` intact.
+"""
+
+
+def credential_candidates(value: str) -> Iterator[str]:
+    """Every substring of `value` that a string detector is applied to.
+
+    The whole string, its whitespace-separated tokens, every URL found **anywhere** in it, and
+    every maximal run of credential characters. Four generators rather than one because they
+    fail differently: the whole string is what carries a `data:` URI's `data:` prefix, the URL
+    scan is what survives a leading `<` or `=`, and the credential runs are what reach into
+    `Cfg(api_key='sk-proj-...')`, where the token contains `(` and `'` and so is not a
+    credential *by shape* until the wrapper is cut away.
+
+    Deduplicated, because on a bare token all four generators produce the same string and each
+    detector would otherwise run four times on it.
+    """
+    seen: set[str] = set()
+    generated = (
+        value,
+        *value.split(),
+        *(
+            match.group().rstrip(_URL_TRAILING_DELIMITERS)
+            for match in _URL_IN_TEXT_RE.finditer(value)
+        ),
+        *(match.group() for match in _CREDENTIAL_RUN_RE.finditer(value)),
+    )
+    for candidate in generated:
+        if candidate not in seen:
+            seen.add(candidate)
+            yield candidate
+
 
 def _scan_string(value: str, path: str) -> Iterator[TripwireHit]:
     """The first rule that matches, and no more: one hit per value is enough to fail.
 
-    Every rule is applied to the whole string **and** to each whitespace-separated token,
-    because the commonest real leak is not a bare secret in a field — it is
-    `log.info("uploading to %s", presigned_url)`, where the forbidden value sits in the middle
-    of an otherwise innocent sentence. A whole-string-only check passes that line, and it is
-    the line people actually write.
+    Every rule is applied to every substring `credential_candidates` produces, because a
+    detector anchored at position zero is a detector one character defeats. The leak this
+    guards against is not `log.info("uploading %s", presigned_url)` — that spelling has a
+    convenient space in front of the URL — but every neighbouring spelling that does not:
+
+        log.info("url=%s", presigned)          log.info("fetching <%s>", presigned)
+        log.info("done (%s)", presigned)       log.info('{"url":"%s"}', presigned)
+        log.info("dsn=%s", database_url)       log.info("config %r", settings_object)
+
+    All six put a `=`, a quote or a bracket immediately before the value, and the last one is
+    the one that actually happens every day: a dataclass, an `httpx.Request`, a client config
+    — anything whose `__repr__` prints a token field. The invariant this establishes is that a
+    secret is never emitted regardless of what surrounds it.
     """
-    for candidate in (value, *value.split()):
+    for candidate in credential_candidates(value):
         for detector, kind, detail in _STRING_DETECTORS:
             if detector(candidate):
                 yield TripwireHit(path, kind, detail)
                 return
+
+
+def contains_never_logged_value(value: str) -> bool:
+    """Whether any never-logged value appears anywhere in `value`.
+
+    The scanner's one public entry point for plain text. It exists for the emission paths that
+    are not the logging system — the startup preflight writes to `stderr` before a logger can
+    exist, and needs the same answer without a `LogRecord` to ask it about.
+    """
+    return any(_scan_string(value, ""))
 
 
 def _scan(value: object, path: str) -> Iterator[TripwireHit]:
@@ -623,6 +783,19 @@ def _clean_text(value: object) -> object:
     return value[:MAX_TEXT_CHARS]
 
 
+def _clean_preview(value: object) -> object:
+    """Free text held to the prompt window rather than to the free-text ceiling.
+
+    The window is enforced here as well as in `summarise_prompt` because the two answer
+    different questions: `summarise_prompt` decides what a *correct* caller emits, and this
+    decides what the field may hold no matter who filled it in.
+    """
+    cleaned = _clean_text(value)
+    if isinstance(cleaned, str):
+        return cleaned[:PROMPT_PREVIEW_CHARS]
+    return cleaned
+
+
 def _clean_number(value: object) -> object:
     if isinstance(value, bool):
         return _DROP
@@ -678,6 +851,7 @@ _CLEANERS: Final[Mapping[FieldKind, Callable[[object], object]]] = {
     FieldKind.IDENTIFIER: _clean_identifier,
     FieldKind.HASH: _clean_hash,
     FieldKind.TEXT: _clean_text,
+    FieldKind.PREVIEW: _clean_preview,
     FieldKind.NUMBER: _clean_number,
     FieldKind.BOOLEAN: _clean_boolean,
     FieldKind.TIMESTAMP: _clean_timestamp,

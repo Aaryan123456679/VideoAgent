@@ -32,12 +32,38 @@ from pydantic import ValidationError
 
 from video_agent.assembly.media_toolchain import assert_media_toolchain
 from video_agent.config.aliases import get_alias_table
-from video_agent.config.settings import Settings, get_settings
+from video_agent.config.settings import (
+    REDACTED_DETAIL,
+    Settings,
+    describe_validation_error,
+    get_settings,
+)
 from video_agent.observability.codes import ErrorCode
 from video_agent.observability.logging import configure_logging, get_logger
+from video_agent.observability.redaction import contains_never_logged_value
 
 EXIT_OK = 0
 EXIT_PRECONDITION_FAILED = 1
+
+PREFLIGHT_FAILURE_PREFIX = "startup preflight failed: "
+
+
+def _safe_for_stderr(detail: str) -> str:
+    """`detail` unless it carries something that must never be emitted.
+
+    This module is the one place in `src/` exempt from the logging guard, so nothing it writes
+    passes through `TripwireFilter` or `redact`. The exemption buys the pre-logging phase a
+    place to speak; it does not buy it an exemption from `AGENT.md` §3. Every string this
+    module hands to `stderr` goes through the same scanner the logging path uses, which is why
+    the scanner has a public entry point that takes plain text.
+    """
+    return REDACTED_DETAIL if contains_never_logged_value(detail) else detail
+
+
+def _report_preflight_failure(detail: str) -> int:
+    """Write one operator sentence to `stderr` and return the failing exit code."""
+    sys.stderr.write(f"{PREFLIGHT_FAILURE_PREFIX}{_safe_for_stderr(detail)}\n")
+    return EXIT_PRECONDITION_FAILED
 
 
 def preflight() -> Settings:
@@ -65,15 +91,20 @@ def main() -> int:
     The second block is deliberately shaped differently. By then logging exists, so the failure
     goes to the structured logger with its code and its trace, and ``stderr`` is no longer
     involved — the traceback belongs in the log, which by that point does exist.
+
+    ``ValidationError`` is caught separately from ``RuntimeError`` and never stringified.
+    ``str(exc)`` on a settings model embeds ``input_value`` — the whole collected settings dict
+    — so the operator sentence for "you forgot ``DATABASE_URL``" would print the API key that
+    *was* set. ``describe_validation_error`` renders the same names without it.
     """
     try:
         settings = preflight()
-    except (RuntimeError, ValidationError) as exc:
-        sys.stderr.write(f"startup preflight failed: {exc}\n")
-        return EXIT_PRECONDITION_FAILED
+    except ValidationError as exc:
+        return _report_preflight_failure(describe_validation_error(exc))
+    except RuntimeError as exc:
+        return _report_preflight_failure(str(exc))
     except Exception as exc:
-        sys.stderr.write(f"startup preflight failed: {type(exc).__name__}: {exc}\n")
-        return EXIT_PRECONDITION_FAILED
+        return _report_preflight_failure(f"{type(exc).__name__}: {exc}")
 
     configure_logging(settings)
     logger = get_logger(__name__)

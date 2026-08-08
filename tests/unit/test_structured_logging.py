@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -31,6 +32,7 @@ from video_agent.observability.context import (
 from video_agent.observability.logging import (
     MISSING_TRACE_ID_ALARM,
     SCHEMA_KEYS,
+    JsonFormatter,
     TraceSampler,
     build_handler,
     configure_logging,
@@ -485,6 +487,99 @@ def test_an_exception_is_recorded_by_type_and_never_by_traceback(sink: Callable[
     assert line["exc_type"] == "ValueError"
     assert "Traceback" not in json.dumps(line)
     assert "a secret-bearing detail" not in json.dumps(line)
+
+
+def test_the_formatter_never_calls_format_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The omission above is a decision, and this is what makes it one.
+
+    `logging.Formatter.format` appends `formatException(record.exc_info)` to the message.
+    `JsonFormatter` does not call it at all, so the property holds by construction rather than
+    because no test has planted a long enough traceback yet. Asserted by making the method
+    raise: if the formatter ever reaches it, this fails loudly instead of quietly emitting a
+    stack.
+
+    Driven against the formatter directly rather than through a handler, and with `exc_text`
+    explicitly cleared. `Formatter.format` skips `formatException` when `exc_text` is already
+    populated, and pytest's own logging plugin populates it on every record it sees — so a
+    version of this test that logged through `get_logger` passed whether the formatter
+    delegated or not. A test that cannot fail is the defect this whole review is about.
+    """
+
+    def refuse(*_unused: object) -> str:
+        message = "formatException must never be reached"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(JsonFormatter, "formatException", refuse)
+
+    try:
+        raise ValueError("a secret-bearing detail")
+    except ValueError:
+        record = logging.LogRecord(
+            name="video_agent.test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="node failed",
+            args=(),
+            exc_info=sys.exc_info(),
+        )
+
+    record.exc_text = None
+    record.trace_id = "trace-abc"
+
+    line = json.loads(JsonFormatter().format(record))
+
+    assert line["exc_type"] == "ValueError"
+    assert "Traceback" not in json.dumps(line)
+    assert "a secret-bearing detail" not in json.dumps(line)
+
+
+def test_an_exception_message_reaches_the_log_only_through_reason(
+    sink: Callable[..., Sink],
+) -> None:
+    """The sanctioned, opt-in route, and it goes through redaction like everything else.
+
+    The capability the caller actually wants — *what did the other end say* — is available;
+    what is not available is getting it by accident. `reason` is an allow-listed `TEXT` field,
+    so it is scanned and truncated, and a caller who chose to include a message that turns out
+    to carry a credential loses the field rather than publishing it.
+    """
+    captured = sink()
+
+    with bind_trace("trace-abc"):
+        try:
+            raise ValueError("upstream returned 503 after 3 attempts")
+        except ValueError as exc:
+            get_logger("video_agent.test").error(
+                "node failed",
+                exc_info=exc,
+                extra={"reason": f"{type(exc).__name__}: {exc}"},
+            )
+
+    line = captured.lines[0]
+    assert line["exc_type"] == "ValueError"
+    assert line["reason"] == "ValueError: upstream returned 503 after 3 attempts"
+
+
+def test_a_reason_carrying_a_credential_is_dropped_and_the_line_survives(
+    sink: Callable[..., Sink],
+) -> None:
+    """The other half: opting in does not opt out of the never-logged list."""
+    captured = sink(mode=TripwireMode.DROP)
+    presigned = (
+        "https://artifacts.example.com/t/j/shot-0.mp4?X-Amz-Signature="
+        "8f4b2c1d9e7a6f5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b"
+    )
+
+    with bind_trace("trace-abc"):
+        get_logger("video_agent.test").warning(
+            "download failed", extra={"reason": f"GET <{presigned}> returned 403"}
+        )
+
+    line = captured.lines[0]
+    assert line.get("reason") is None
+    assert "X-Amz-Signature" not in json.dumps(line)
+    assert line["msg"] == "download failed"
 
 
 # --- The individual context accessors ------------------------------------------------------

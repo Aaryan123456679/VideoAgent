@@ -1,10 +1,16 @@
 """The alias table and the per-model price table: loader, schema and startup validation.
 
-`config/aliases.yaml` is the only file in the tree where a concrete model name may appear
-`[CPS §Model routing]`, `[AGENT.md §2]`. Application code names a logical alias; the gateway
-resolves it at call time; swapping a model is therefore a config change with zero code diff.
-`tests/static_guards.py` is what makes that a property of the repository rather than a
-convention — this module is what makes the config side of it typed.
+`config/aliases.yaml` is where every concrete **LLM** model name lives, and the only file that
+may name more than one `[CPS §Model routing]`, `[AGENT.md §2]`. Application code names a logical
+alias; the gateway resolves it at call time; swapping a model is therefore a config change with
+zero code diff. `tests/static_guards.py` is what makes that a property of the repository rather
+than a convention — this module is what makes the config side of it typed.
+
+One name lives elsewhere, and the claim that this file is the *only* one was simply wrong: the
+video model is a single typed default on the settings object with an environment override, not
+a routed alias, because there is one video provider and no failover group to route within. The
+static guard's allow-list is exactly two files for exactly that reason, and it is pinned so a
+third cannot appear quietly.
 
 Everything here fails **closed**. `gateway.md` §8: "Alias not in config → `VA-GW-002`,
 non-retryable, fail closed. Never guess a model." The same reasoning covers a table that will
@@ -18,7 +24,7 @@ pessimistic ceiling.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -30,6 +36,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from video_agent.config.errors import AliasConfigError
+from video_agent.observability.logging import get_logger
+
+_LOGGER = get_logger(__name__)
 
 ALIAS_FILE_RELATIVE_PATH = Path("config") / "aliases.yaml"
 """Where the table lives, relative to a repository root or to an installed package root."""
@@ -165,20 +174,42 @@ class AliasTable:
         return frozenset(model for entry in self.aliases.values() for model in entry.models)
 
 
-def _default_alias_path() -> Path:
-    """Locate `config/aliases.yaml` by walking up from this module, then from the cwd.
+def alias_search_roots(working_dir: Path, module_dir: Path) -> tuple[Path, ...]:
+    """The directories to walk up from, in precedence order: **deployment before build**.
 
-    Two search roots because the file has two homes: the repository checkout during
-    development and tests, and the package directory once the wheel force-includes it. A
-    single hard-coded relative path would work in exactly one of them.
+    The file has two homes — the repository checkout during development, and the package
+    directory once the wheel force-includes it — and which one wins is not a detail. This table
+    exists so that swapping a model is a config change with zero code diff `[CPS §Model
+    routing]`; an operator mounts an edited table over `config/aliases.yaml` and restarts. With
+    the module-relative walk running first, the copy baked into the image at build time shadowed
+    the mounted one permanently, and it did so in silence: the process started, resolved every
+    alias, and used the build-time model. The precedence has to run the other way for the
+    mechanism to mean anything.
+
+    Walking *up* from each root rather than checking it directly, so a process started from a
+    subdirectory of the checkout still finds the table.
     """
-    for start in (Path(__file__).resolve().parent, Path.cwd().resolve()):
+    return (working_dir.resolve(), module_dir.resolve())
+
+
+def find_alias_file(roots: Sequence[Path]) -> Path | None:
+    """The first `config/aliases.yaml` at or above any of `roots`, in order. `None` if absent."""
+    for start in roots:
         for directory in (start, *start.parents):
             candidate = directory / ALIAS_FILE_RELATIVE_PATH
             if candidate.is_file():
                 return candidate
-    message = f"{ALIAS_FILE_RELATIVE_PATH} was not found above {Path(__file__).parent} or the cwd"
-    raise AliasConfigError(message)
+    return None
+
+
+def _default_alias_path() -> Path:
+    roots = alias_search_roots(Path.cwd(), Path(__file__).parent)
+    found = find_alias_file(roots)
+    if found is None:
+        searched = ", ".join(str(root) for root in roots)
+        message = f"{ALIAS_FILE_RELATIVE_PATH} was not found at or above any of: {searched}"
+        raise AliasConfigError(message)
+    return found
 
 
 def _parse_document(path: Path) -> _AliasDocument:
@@ -236,10 +267,17 @@ def load_alias_table(path: Path | None = None) -> AliasTable:
 
     Raises `AliasConfigError` (`VA-GW-002`) on anything that would leave an alias
     unresolvable or a referenced model unpriced.
+
+    Logs which file was used, at `info`. Two candidates exist by design and only one wins, so
+    "which table is this process actually running on" is a question an operator will ask — and
+    a restart that appeared to change nothing is the worst moment to have no answer. The path
+    goes in the message rather than in a new allow-listed field: `AGENT.md` §3 asks that the
+    allow-list not grow, and a message is scanned and truncated exactly as a field would be.
     """
     resolved = _default_alias_path() if path is None else path
     document = _parse_document(resolved)
     _validate_document(document, resolved)
+    _LOGGER.info("alias table loaded from %s", resolved, extra={"event": "alias_table_loaded"})
     return AliasTable(
         aliases=MappingProxyType(dict(document.aliases)),
         prices=MappingProxyType(dict(document.prices)),

@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "013-implementation",
+  "macro": "cdr-implementation",
+  "macro_version": "1",
+  "agent": "implementation",
+  "subtask": "T0.2/T0.3 verification-finding remediation",
+  "git_head": "cede9076a6a1b96c1341d36c3b2a1558855536ce",
+  "run_key": "t02t03-fixes-cede9076",
+  "status": "completed",
+  "last_completed_step": "self-consistency (lint/type/test green); NOT COMMITTED per instruction",
+  "started_at": "2026-08-08T06:00:00Z",
+  "ended_at": "2026-08-08T07:40:00Z"
+}

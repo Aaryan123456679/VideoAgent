@@ -32,7 +32,7 @@ from starlette.exceptions import HTTPException
 from video_agent.api.app import create_app
 from video_agent.api.database import Database, tenant_session
 from video_agent.api.errors import ApiError
-from video_agent.api.idempotency import IdempotencyRecord
+from video_agent.api.idempotency import IdempotencyRecord, IdempotencyState
 from video_agent.api.principal import (
     KEY_PREFIX_LENGTH,
     PresentedKey,
@@ -435,7 +435,7 @@ async def test_recording_database_delegates_to_the_real_scope() -> None:
 async def test_in_memory_store_claims_once() -> None:
     """The store used by the idempotency tests really is compare-and-set."""
     store = InMemoryIdempotencyStore()
-    record = IdempotencyRecord(state="in_flight", fingerprint="f")
+    record = IdempotencyRecord(state=IdempotencyState.IN_FLIGHT, fingerprint="f")
 
     first = await store.claim("k", record)
     second = await store.claim("k", record)

@@ -88,19 +88,69 @@ def test_required_fields_are_exactly_the_three_that_cannot_be_guessed() -> None:
     assert required == {"MAGICHOUR_API_KEY", "DATABASE_URL", "REDIS_URL"}
 
 
+def _rendered(settings: Settings, name: str) -> str:
+    """The field's value as `.env.example` would spell it.
+
+    `str()` on a `SecretStr` is `**********`, which compares equal to nothing in the contract
+    and unequal to everything — so a comparison built on it can only ever be made to pass by
+    excluding the field. Unwrapping is what lets the nine credential variables be checked at
+    all.
+    """
+    value = getattr(settings, name)
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    return str(value)
+
+
 def test_defaults_match_the_env_example_values(
     build_settings: SettingsFactory, env_example: dict[str, str]
 ) -> None:
-    """`.env.example` is the contract for values too, not only for names."""
+    """`.env.example` is the contract for values too, not only for names.
+
+    Including the values it declares **empty**. An `if declared` filter here excused thirteen
+    variables — every optional credential, both toolchain overrides and the object-store
+    endpoint — from the contract entirely: changing a default from `""` to anything at all left
+    the suite green, which is the one thing this test exists to catch. A declared-empty variable
+    is a contract term saying *this deployment may legitimately not have one*, and a code
+    default that quietly disagrees is how a deployment starts pointing somewhere nobody chose.
+    """
     settings = build_settings()
     required = {name for name, field in Settings.model_fields.items() if field.is_required()}
 
     mismatches = {
-        name: (declared, str(getattr(settings, name)))
+        name: (declared, _rendered(settings, name))
         for name, declared in env_example.items()
-        if declared and name not in required and str(getattr(settings, name)) != declared
+        if name not in required and _rendered(settings, name) != declared
     }
     assert mismatches == {}
+
+
+def test_the_contract_check_covers_the_variables_declared_empty(
+    env_example: dict[str, str],
+) -> None:
+    """Guards the guard: if the empty declarations stop being checked, this says so.
+
+    Named explicitly rather than counted, so removing one from `.env.example` fails the
+    contract test rather than quietly shrinking this one.
+    """
+    declared_empty = {name for name, value in env_example.items() if not value}
+    required = {name for name, field in Settings.model_fields.items() if field.is_required()}
+
+    assert declared_empty >= {
+        "MAGICHOUR_WEBHOOK_SECRET",
+        "LITELLM_MASTER_KEY",
+        "GEMINI_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "ARTIFACT_ENDPOINT_URL",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "FFMPEG_BINARY",
+        "FFPROBE_BINARY",
+    }
+    assert declared_empty - required, "every empty declaration is required; nothing left to check"
 
 
 def test_settings_load_when_the_provider_key_is_empty(build_settings: SettingsFactory) -> None:

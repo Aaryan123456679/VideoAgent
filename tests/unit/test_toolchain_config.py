@@ -48,6 +48,56 @@ def test_mypy_strict_enabled(pyproject: dict[str, Any]) -> None:
     assert mypy["warn_unused_ignores"] is True
 
 
+def test_the_pydantic_plugin_is_configured_to_type_its_synthesised_init(
+    pyproject: dict[str, Any],
+) -> None:
+    """`pydantic.mypy` without this table is a relaxation of the whole tree, not a tightening.
+
+    `init_typed` defaults to `false`, so the `__init__` the plugin synthesises annotates every
+    field as `Any` and constructor argument checking silently disappears from every model —
+    including the six that exist today and every one added since. The plugin itself is needed
+    (removing it makes `Settings()` three `call-arg` errors), so the table is how both hold.
+    """
+    plugin: dict[str, Any] = pyproject["tool"]["pydantic-mypy"]
+    assert plugin["init_typed"] is True
+    assert plugin["init_forbid_extra"] is True
+
+
+def test_a_wrongly_typed_model_argument_is_a_type_error(repo_root: Path, tmp_path: Path) -> None:
+    """The behavioural half: run the configured type checker over a planted violation.
+
+    Asserted through mypy rather than through the config alone because the setting's *effect*
+    is the claim, and a table entry that stopped working after a plugin upgrade would leave the
+    config test green. Both spellings the table restores are planted: a wrong argument type and
+    an argument that is not a field at all.
+    """
+    mypy = shutil.which("mypy")
+    if mypy is None:
+        pytest.skip("mypy is not on PATH; run inside the project venv")
+
+    offender = tmp_path / "wrong_model_argument.py"
+    offender.write_text(
+        "from video_agent.config.aliases import ModelRef\n"
+        "\n"
+        "\n"
+        "def build() -> ModelRef:\n"
+        '    return ModelRef(model=123, weight="not an int", nonsense=True)\n',
+        encoding="utf-8",
+    )
+
+    result = _run(
+        [mypy, "--strict", "--no-incremental", str(offender)],
+        cwd=repo_root,
+    )
+    report = result.stdout + result.stderr
+
+    assert result.returncode != 0, report
+    assert "arg-type" in report, report
+    assert 'Argument "model"' in report, report
+    assert 'Argument "weight"' in report, report
+    assert "call-arg" in report, report
+
+
 def test_ruff_selects_the_bare_type_ignore_rule(pyproject: dict[str, Any]) -> None:
     """PGH003 is what makes an uncoded `# type: ignore` a lint error."""
     select: list[str] = pyproject["tool"]["ruff"]["lint"]["select"]

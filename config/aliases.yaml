@@ -1,9 +1,20 @@
 # ---------------------------------------------------------------------------------------
-# Alias table — the ONLY file in this repository where a concrete model name may appear.
+# Alias table — where every routed model name lives, and the only file that may name more
+# than one.
 #
 # Application code names a logical alias (`reasoning-high`, `vision-default`, ...); the
 # gateway resolves it to a model at call time. Swapping a model is therefore an edit to this
 # file and nothing else: zero code diff. [CPS Model routing] [AGENT.md 2]
+#
+# One name is NOT here, and the claim that this file was the only one was wrong: the video
+# model is a single typed default on the settings object, overridden from the environment,
+# because there is one video provider and so no failover group to route within. The static
+# guard's allow-list is exactly those two files plus the adapter, and it is pinned.
+#
+# This file also has two homes — the deployment's mounted copy and the copy baked into the
+# image at build time — and the MOUNTED one wins. That is the whole point of the mechanism:
+# an operator edits the table, restarts, and gets the new model. The process logs the path it
+# resolved at startup, so which copy won is never a guess.
 #
 # The alias set is FIXED at these five. Adding one is a specification change, not a config
 # change. `realtime-voice` and `embed-default` have no consumer in v1 [D-13]; they are

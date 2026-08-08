@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -27,13 +28,16 @@ from video_agent.observability.redaction import (
     ALLOWED_FIELDS,
     CREDENTIAL_KEY_PATTERNS,
     MAX_IDENTIFIER_CHARS,
+    MAX_TEXT_CHARS,
     PROMPT_PREVIEW_CHARS,
     REDACTION_TRIPWIRE_ALARM,
     FieldKind,
     HitKind,
     RedactionTripwireError,
     TripwireMode,
+    contains_never_logged_value,
     is_credential_key,
+    is_filesystem_path,
     is_presigned_url,
     looks_like_media,
     looks_like_secret,
@@ -156,6 +160,15 @@ def test_credential_key_names_are_recognised(name: str) -> None:
     assert is_credential_key(name)
 
 
+@pytest.mark.parametrize("name", ["sig", "x_sig", "request_sig"])
+def test_a_signature_is_a_credential_by_its_abbreviated_name_too(name: str) -> None:
+    """A SigV4 signature is 64 lowercase hex characters — a SHA-256 digest, character for
+    character. Digests are allow-listed and load-bearing, so no shape rule can tell the two
+    apart and the field name is the only thing left. `SIGNATURE_QUERY_PARAMS` already listed
+    this abbreviation for URLs; the name rule did not."""
+    assert is_credential_key(name)
+
+
 @pytest.mark.parametrize("name", ["storage_key", "provider_key", "artifact_id", "job_id", "node"])
 def test_identifier_key_names_are_not_mistaken_for_credentials(name: str) -> None:
     """`storage_key` and `provider_key` are required span attributes `[§2.2]`, `[§5]`.
@@ -209,6 +222,7 @@ ONE_FIELD_PER_KIND: dict[FieldKind, str] = {
     FieldKind.BOOLEAN: "degraded",
     FieldKind.TIMESTAMP: "ts",
     FieldKind.PROMPT: "prompt",
+    FieldKind.PREVIEW: "prompt_preview",
     FieldKind.NESTED: "capabilities_required",
 }
 
@@ -357,6 +371,162 @@ def test_a_url_with_an_unfamiliar_but_high_entropy_query_parameter_is_dropped() 
     assert PLANTED_OPAQUE_CREDENTIAL not in str(_drop({"msg": unfamiliar}))
 
 
+# --- A secret is never emitted regardless of what surrounds it -----------------------------------
+#
+# The invariant, stated as a grid rather than as a list of spellings. Every detector in this
+# module was once anchored at position zero, so a single leading `=`, `'`, `<`, `(` or `[` made
+# all of them miss and the value was emitted up to `MAX_TEXT_CHARS` — longer than any presigned
+# URL. Enumerating the spellings that leaked would fix those spellings; the grid fixes the
+# class, and fails for the next member of it too.
+
+PLANTED_DSN = "postgresql+asyncpg://app:hunter2SuperSecret@db.internal:5432/video"
+"""`AGENT.md` §3 names DB URLs. The password is in the userinfo, before the `@`."""
+
+PLANTED_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+PLANTED_SECRETS: dict[str, str] = {
+    "presigned": PLANTED_S3_PRESIGNED,
+    "issuer_key": PLANTED_API_KEY,
+    "opaque": PLANTED_OPAQUE_CREDENTIAL,
+    "dsn": PLANTED_DSN,
+    "jwt": PLANTED_JWT,
+}
+
+SURROUNDINGS: dict[str, str] = {
+    # The seven spellings the verifier executed, each of which printed the secret in full.
+    "assignment": "url={secret}",
+    "single_quoted": "fetching '{secret}'",
+    "angle_bracketed": "fetching <{secret}>",
+    "parenthesised": "done ({secret})",
+    "json_embedded": 'payload {{"url":"{secret}"}}',
+    "bare_assignment": "dsn={secret}",
+    "reason_field": "GET <{secret}> returned 403",
+    # And spellings it did not, which the same anchoring defeated just as completely.
+    "brace_wrapped": "{{{secret}}}",
+    "backticked": "`{secret}`",
+    "markdown_link": "see [the artifact]({secret}) before it expires",
+    "html_attribute": '<a href="{secret}">download</a>',
+    "square_bracketed": "[{secret}]",
+    "yaml_value": "url: {secret}",
+    "csv_row": "id,value\n1,{secret}",
+    "trailing_sentence": "fetched {secret}. Retrying next shot.",
+    "colon_prefixed": "credential:{secret}",
+    "comma_separated": "candidates: {secret},{secret}",
+    "dataclass_repr": "config Cfg(api_key='{secret}', timeout=30)",
+    "dict_repr": "{{'credential': '{secret}'}}",
+    "kwargs_repr": "Request(url={secret!r}, method='GET')",
+    "exception_repr": "ClientError('403 for <{secret}>')",
+    "no_whitespace_at_all": "before{secret}after",
+}
+
+
+@pytest.mark.parametrize("secret_name", sorted(PLANTED_SECRETS))
+@pytest.mark.parametrize("surrounding_name", sorted(SURROUNDINGS))
+@pytest.mark.parametrize("field", ["msg", "reason", "prompt_preview"])
+def test_a_secret_is_never_emitted_whatever_surrounds_it(
+    secret_name: str, surrounding_name: str, field: str
+) -> None:
+    """`S0.3.3` acceptance 2 and 3, restated so one leading character cannot defeat them."""
+    secret = PLANTED_SECRETS[secret_name]
+    message = SURROUNDINGS[surrounding_name].format(secret=secret)
+
+    assert contains_never_logged_value(message), message
+    assert _drop({field: message}) == {}
+
+
+@pytest.mark.parametrize("secret_name", sorted(PLANTED_SECRETS))
+@pytest.mark.parametrize("surrounding_name", sorted(SURROUNDINGS))
+def test_the_tripwire_fires_on_a_surrounded_secret(secret_name: str, surrounding_name: str) -> None:
+    """Dropping quietly is not enough: the call site has to be found and fixed `[D-54]`."""
+    message = SURROUNDINGS[surrounding_name].format(secret=PLANTED_SECRETS[secret_name])
+
+    with pytest.raises(RedactionTripwireError):
+        redact({"msg": message}, mode=TripwireMode.RAISE)
+
+
+def test_a_settings_object_repr_does_not_leak_its_token() -> None:
+    """The everyday case: `log.info("config %r", cfg)` on anything with a token field.
+
+    The token fails the credential charset because of the `(` and the `'` around it, and does
+    not start with an issuer prefix because `Cfg(api_key='` comes first — so both the shape
+    rule and the prefix rule missed it while the value was emitted verbatim.
+    """
+
+    @dataclass
+    class Cfg:
+        api_key: str = PLANTED_API_KEY
+        endpoint: str = "https://api.example.com"
+
+    result = _drop({"msg": f"config {Cfg()!r}"})
+
+    assert result == {}
+    assert PLANTED_API_KEY not in str(result)
+
+
+def test_an_authorization_header_is_dropped_mid_sentence() -> None:
+    """`Authorization: Bearer ...` is never at position zero in a real log line."""
+    assert contains_never_logged_value(f"sent Authorization: Bearer {PLANTED_OPAQUE_CREDENTIAL}")
+    assert _drop({"msg": f"sent Authorization: Bearer {PLANTED_OPAQUE_CREDENTIAL}"}) == {}
+
+
+@pytest.mark.parametrize("prose", ["the basic idea is sound", "we sent Bearer tokens upstream"])
+def test_the_authorization_rule_does_not_fire_on_the_scheme_word_alone(prose: str) -> None:
+    """`basic` and `bearer` are ordinary English; the credential must be present too."""
+    assert not contains_never_logged_value(prose)
+
+
+def test_a_connection_string_without_its_scheme_is_still_dropped() -> None:
+    """`f"{user}:{password}@{host}:{port}"` reassembled by hand has no scheme to split on."""
+    assert contains_never_logged_value("connect to app:hunter2SuperSecret@db.internal:5432")
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "handler:process_job@worker.py raised",
+        "module:function@file.py line 12",
+    ],
+)
+def test_the_schemeless_userinfo_rule_needs_a_port(prose: str) -> None:
+    """`name:name@name.name` is an ordinary way to name a call site. A port is not."""
+    assert not contains_never_logged_value(prose)
+
+
+# --- Filesystem paths are not credentials --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/private/var/folders/9k/T/pytest-of-runner/pytest-12/test_alias_table0/config/aliases.yaml",
+        "/Users/Someone/Projects/Video_Agent_2/config/aliases.yaml",
+        "/usr/local/lib/python3.12/site-packages/video_agent/config/aliases.yaml",
+    ],
+)
+def test_an_absolute_path_is_not_mistaken_for_a_credential(path: str) -> None:
+    """`/` is in the base64 charset, so a deep path is long, mixed-case and high-entropy.
+
+    This is not a cosmetic false positive: the tripwire *raises* outside production, so a
+    deployment whose configuration happened to live at a busy path would refuse to start.
+    """
+    assert is_filesystem_path(path)
+    assert not looks_like_secret(path)
+    assert not contains_never_logged_value(f"alias table loaded from {path}")
+
+
+def test_a_secret_that_merely_begins_with_a_slash_is_still_a_secret() -> None:
+    """The path exemption is by segment, so a base64 blob cannot buy it with a leading slash."""
+    blob = f"/{PLANTED_OPAQUE_CREDENTIAL}/{PLANTED_OPAQUE_CREDENTIAL}"
+
+    assert not is_filesystem_path(blob)
+    assert looks_like_secret(blob)
+
+
+def test_a_single_segment_after_a_slash_is_not_a_path() -> None:
+    """`/` plus one long random segment is a token with a slash in it, not a directory tree."""
+    assert not is_filesystem_path(f"/{PLANTED_OPAQUE_CREDENTIAL}")
+
+
 # --- Media payloads -----------------------------------------------------------------------------
 
 
@@ -375,6 +545,39 @@ def test_a_media_payload_is_dropped(value: str) -> None:
 
     assert "msg" not in result
     assert result["storage_key"] == "tenant/job/shot-0.mp4"
+
+
+ISO_BMFF_BOXES: dict[str, bytes] = {
+    # Length 0x20, not the 0x18 that `MEDIA_MAGIC_PREFIXES` spells out literally. Every MP4
+    # whose first box is a different size than the one in that table reaches the offset-4
+    # fallback instead, and until this test the fallback could be replaced with `return False`
+    # without a single assertion noticing.
+    "ftyp_other_length": b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41",
+    "moov_first": b"\x00\x00\x04\x1cmoov\x00\x00\x00\x6cmvhd" + b"\x00" * 32,
+    "mdat_first": b"\x00\x01\x86\xa0mdat" + b"\x11" * 32,
+    "free_first": b"\x00\x00\x00\x08free" + b"\x00" * 32,
+}
+
+
+@pytest.mark.parametrize("container", sorted(ISO_BMFF_BOXES))
+def test_an_iso_bmff_container_is_recognised_by_its_box_type(container: str) -> None:
+    """The length prefix varies per file; the box type at offset 4 is what identifies it."""
+    raw = ISO_BMFF_BOXES[container]
+
+    assert looks_like_media(raw.decode("latin-1"))
+    assert _drop({"msg": base64.b64encode(raw).decode("ascii")}) == {}
+
+
+@pytest.mark.parametrize("container", sorted(ISO_BMFF_BOXES))
+def test_the_tripwire_names_an_iso_bmff_container_as_a_media_payload(container: str) -> None:
+    hits = scan_payload({"msg": ISO_BMFF_BOXES[container]})
+
+    assert [hit.kind for hit in hits] == [HitKind.MEDIA_PAYLOAD]
+
+
+def test_eight_bytes_that_are_not_a_box_type_are_not_media() -> None:
+    """The other side of the fallback: offset 4 has to hold a *known* box type."""
+    assert not looks_like_media(base64.b64encode(b"\x00\x00\x00\x20notabox").decode("ascii"))
 
 
 @pytest.mark.parametrize("value", [PNG_BYTES, MP4_BYTES])
@@ -418,6 +621,27 @@ def test_a_prompt_preview_containing_a_credential_is_dropped_but_the_digest_surv
 
     assert "prompt_preview" not in summary
     assert len(summary["prompt_sha256"]) == SHA256_HEX_CHARS
+
+
+def test_a_prompt_preview_passed_directly_is_held_to_the_same_window() -> None:
+    """`observability.md` §5 — the prompt is never logged in full, by any route to the field.
+
+    `summarise_prompt` is exact and correct, but it is not the only way `prompt_preview` gets
+    filled in. A caller passing the field straight through was getting `MAX_TEXT_CHARS` of raw
+    prompt, sixteen times the permitted window, and the canary could not see it because the
+    canary only inspects previews the `prompt` path produced.
+    """
+    result = _drop({"prompt_preview": LONG_PROMPT})
+
+    assert len(str(result["prompt_preview"])) == PROMPT_PREVIEW_CHARS
+    assert result["prompt_preview"] == LONG_PROMPT[:PROMPT_PREVIEW_CHARS]
+    assert LONG_PROMPT[:MAX_TEXT_CHARS] not in str(result)
+
+
+def test_the_preview_window_is_far_narrower_than_the_free_text_ceiling() -> None:
+    """Pins the gap the finding is about: these two being equal is the defect returning."""
+    assert PROMPT_PREVIEW_CHARS < MAX_TEXT_CHARS
+    assert ALLOWED_FIELDS["prompt_preview"] is FieldKind.PREVIEW
 
 
 def test_a_short_prompt_is_still_never_emitted_in_full_under_its_own_key() -> None:

@@ -17,8 +17,10 @@ from pathlib import Path
 import pytest
 
 from tests.static_guards import (
+    ALLOWLISTED_PATHS,
     BANNED_NAMES,
     MAGICHOUR_MODEL_NAMES,
+    SCANNED_SUFFIXES,
     Violation,
     find_inline_prompts,
     find_model_branches,
@@ -124,12 +126,76 @@ def test_provider_name_allowed_in_adapter_and_config(tmp_path: Path) -> None:
     assert violations == [], format_violations(violations)
 
 
-def test_the_allowlist_is_exactly_the_adapter_and_config() -> None:
-    assert is_allowlisted("src/video_agent/providers/magichour.py")
+EXPECTED_ALLOWLIST: tuple[str, ...] = (
+    "src/video_agent/providers/magichour.py",
+    "src/video_agent/config/settings.py",
+    "config/aliases.yaml",
+)
+"""Transcribed independently of `tests/static_guards.py`, so the two have to agree."""
+
+
+def test_the_allowlist_is_pinned_to_exactly_these_three_files() -> None:
+    """The tuple itself, not a sample of paths through it.
+
+    `S0.2.3.2` calls for the adapter and the config *files*. Sampling five paths and asserting
+    the right answers left the tuple free: adding `observability`, `harness`, `api`,
+    `persistence` or `assembly` to it passed CI in silence, because none of the five samples
+    lived under any of them. `AGENT.md` §2 — *do not add an exclusion to it* — is unenforceable
+    unless the list is pinned.
+    """
+    assert ALLOWLISTED_PATHS == EXPECTED_ALLOWLIST
+
+
+@pytest.mark.parametrize("entry", sorted(ALLOWLISTED_PATHS))
+def test_every_allowlist_entry_names_a_file_and_never_a_directory(
+    repo_root: Path, entry: str
+) -> None:
+    """A directory entry exempts every file under it, including the ones not written yet.
+
+    This is the property that actually failed: `src/video_agent/config` was a directory, so any
+    module added to that package inherited the exemption without anyone deciding it should.
+
+    Existence is checked only when the path is there. The adapter is declared ahead of its
+    module by `[D-06]` — it is an E1 deliverable — and requiring it to exist would turn this
+    into a test of the delivery schedule.
+    """
+    assert Path(entry).suffix in SCANNED_SUFFIXES, entry
+    assert not (repo_root / entry).is_dir(), entry
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["observability", "harness", "api", "persistence", "assembly", "gateway", "graph"],
+)
+def test_no_package_directory_is_exempt(module: str) -> None:
+    """The mutation the verifier used, run as an assertion instead."""
+    assert not is_allowlisted(f"src/video_agent/{module}/anything.py")
+    assert not is_allowlisted(f"src/video_agent/{module}")
+
+
+def test_a_sibling_of_an_allowlisted_file_is_not_exempt() -> None:
+    """`settings.py` is exempt; the package it lives in is not."""
     assert is_allowlisted("src/video_agent/config/settings.py")
-    assert is_allowlisted("config/aliases.yaml")
+    assert not is_allowlisted("src/video_agent/config/aliases.py")
+    assert not is_allowlisted("src/video_agent/config/errors.py")
+    assert not is_allowlisted("src/video_agent/config/added_next_month.py")
     assert not is_allowlisted("src/video_agent/providers/registry.py")
     assert not is_allowlisted("src/video_agent/gateway/client.py")
+
+
+def test_every_existing_exemption_is_load_bearing(repo_root: Path) -> None:
+    """An entry that exempts a file naming nothing is an entry nobody needs.
+
+    That is exactly what `src/video_agent/config` was doing for `aliases.py` and `errors.py`,
+    and an unnecessary exemption is the one nobody notices growing. Checked against the files
+    that exist; the adapter is an E1 deliverable `[D-06]`.
+    """
+    present = [entry for entry in ALLOWLISTED_PATHS if (repo_root / entry).is_file()]
+    assert present, "the allow-list has drifted away from the tree entirely"
+
+    for entry in present:
+        text = (repo_root / entry).read_text(encoding="utf-8").lower()
+        assert any(name in text for name in BANNED_NAMES), entry
 
 
 @pytest.mark.parametrize("vendor", ["openai", "anthropic", "claude", "gemini", "higgsfield"])

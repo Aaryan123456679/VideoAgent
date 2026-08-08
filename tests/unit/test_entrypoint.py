@@ -18,17 +18,20 @@ from __future__ import annotations
 
 import inspect
 import json
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 import pytest
+from pydantic import ValidationError
 
 from tests.unit.test_app_shell import captured_logs
 from video_agent import __main__ as entrypoint
-from video_agent.config.settings import get_settings
+from video_agent.config.settings import (
+    REDACTED_DETAIL,
+    Settings,
+    describe_validation_error,
+    get_settings,
+)
 from video_agent.observability.codes import ErrorCode
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from video_agent.config.settings import Settings
 
 PLANTED: Final = "planted-failure-detail"
 
@@ -238,6 +241,108 @@ def test_the_startup_log_line_carries_no_credentials() -> None:
     serialised = json.dumps(lines)
     for marker in ("MAGICHOUR_API_KEY=", "postgresql+asyncpg://", "SecretStr"):
         assert marker not in serialised
+
+
+# --- The pre-logging phase is exempt from the logger, not from the never-logged list ---------
+
+PLANTED_STARTUP_KEY: Final = "mhk_live_PLANTED_REALKEY_ABC"
+"""Set in the environment of a deployment whose `.env` is otherwise incomplete."""
+
+
+def _sparse_settings_error(monkeypatch: pytest.MonkeyPatch, env_example: dict[str, str]) -> None:
+    """The misconfigured-deploy shape: one variable set, the required ones absent."""
+    for name in env_example:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MAGICHOUR_API_KEY", PLANTED_STARTUP_KEY)
+
+
+def test_a_settings_failure_names_every_missing_variable_without_printing_any_value(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], env_example: dict[str, str]
+) -> None:
+    """Pydantic's `missing` error carries `input_value` — the whole collected settings dict.
+
+    `str(exc)` therefore prints the credentials that *were* configured while explaining the one
+    that was not, straight to `stderr`, and this module is deliberately exempt from the logging
+    guard so redaction never sees it. `AGENT.md` §3 names API keys and DB URLs while forbidding
+    exactly this.
+
+    The leak is intermittent, which is what makes it dangerous rather than merely wrong:
+    pydantic truncates a long `input_value` repr, so a fully-populated environment hides it and
+    the sparse, half-configured deployment does not.
+    """
+    _sparse_settings_error(monkeypatch, env_example)
+    monkeypatch.setattr(entrypoint, "preflight", lambda: Settings(_env_file=None))
+
+    assert entrypoint.main() == entrypoint.EXIT_PRECONDITION_FAILED
+    stderr = capsys.readouterr().err
+
+    assert PLANTED_STARTUP_KEY not in stderr
+    assert "input_value" not in stderr
+    # The acceptance criterion the redaction must not cost us: every missing name, one message.
+    assert len(unstructured_lines(stderr)) == 1
+    for name in ("DATABASE_URL", "REDIS_URL"):
+        assert name in stderr
+
+
+def test_describe_validation_error_names_the_fields_and_omits_the_input(
+    monkeypatch: pytest.MonkeyPatch, env_example: dict[str, str]
+) -> None:
+    """The renderer on its own, so a change to it fails here and not only through `main()`."""
+    _sparse_settings_error(monkeypatch, env_example)
+
+    with pytest.raises(ValidationError) as raised:
+        Settings(_env_file=None)
+
+    described = describe_validation_error(raised.value)
+
+    assert PLANTED_STARTUP_KEY not in described
+    assert "DATABASE_URL" in described
+    assert "REDIS_URL" in described
+
+
+def test_a_stderr_sentence_carrying_a_secret_is_replaced_rather_than_written(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The scanner runs on this path too, whatever the exception happens to carry.
+
+    `describe_validation_error` fixes the one failure mode that was reproduced. This asserts
+    the general property the exemption needs: **nothing** `main()` writes to `stderr` before
+    logging exists carries a never-logged value, including the message of an exception raised
+    by a preflight step nobody has written yet.
+    """
+    presigned = (
+        "https://artifacts.example.com/t/j/shot-0.mp4?X-Amz-Signature="
+        "8f4b2c1d9e7a6f5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b"
+    )
+
+    def boom() -> Settings:
+        message = f"upload failed for <{presigned}>"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(entrypoint, "preflight", boom)
+
+    assert entrypoint.main() == entrypoint.EXIT_PRECONDITION_FAILED
+    stderr = capsys.readouterr().err
+
+    assert "X-Amz-Signature" not in stderr
+    assert entrypoint.PREFLIGHT_FAILURE_PREFIX in stderr
+    assert REDACTED_DETAIL in stderr
+
+
+def test_an_ordinary_failure_sentence_is_still_written_in_full(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The scanner must not cost the operator the reason in the overwhelmingly common case."""
+
+    def boom() -> Settings:
+        message = "ffmpeg 6.1 found, 7.1 required. Install it and retry."
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(entrypoint, "preflight", boom)
+
+    entrypoint.main()
+
+    assert "ffmpeg 6.1 found, 7.1 required." in capsys.readouterr().err
 
 
 def test_main_returns_an_int_and_never_none() -> None:

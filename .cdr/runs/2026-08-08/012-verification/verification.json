@@ -1,0 +1,176 @@
+{
+  "schema_version": "1.0",
+  "run": "2026-08-08/012-verification",
+  "agent": "verification",
+  "subtask": "T0.3",
+  "commit_under_review": "b96a740",
+  "tree_tested": "bf19f97",
+  "verdict": "CHANGES_REQUESTED",
+  "acceptance_criteria": [
+    {
+      "id": "S0.3.1.1",
+      "text": "Enum contains exactly the codes in observability.md §6",
+      "verdict": "PASS",
+      "evidence": "52 rows in §6, 52 enum members, zero set difference either direction; doc mutations D1-D4 and enum mutations E1-E2 all caught"
+    },
+    {
+      "id": "S0.3.1.2",
+      "text": "Each member exposes retryable: bool and meaning: str",
+      "verdict": "PASS",
+      "evidence": "codes.py:168-175 retryable property over 4-valued Retryability; meaning on __new__"
+    },
+    {
+      "id": "S0.3.1.3",
+      "text": "VA-PROV-009 present with retryable=False (D-62)",
+      "verdict": "PASS",
+      "evidence": "codes.py:111-115; mutation M10 (->YES) caught by 11 tests"
+    },
+    {
+      "id": "S0.3.1.4",
+      "text": "CI test cross-checks enum against markdown, both directions",
+      "verdict": "PASS",
+      "evidence": "test_enum_matches_taxonomy_table + test_enum_retryability_matches_the_table; 4 markdown mutations caught"
+    },
+    {
+      "id": "S0.3.1.5",
+      "text": "codes.registry.json committed; removing or re-pointing fails CI",
+      "verdict": "PASS",
+      "evidence": "52 rows; mutations R1 (delete), R2b (repoint), R3 (retire+reissue), R4 (retryability), R5 (schema) all caught"
+    },
+    {
+      "id": "S0.3.2.1",
+      "text": "Every emitted line parses as JSON and carries trace_id",
+      "verdict": "PASS",
+      "evidence": "canary asserts 13 lines all JSON with trace_id; M25 (no sanitise) caught"
+    },
+    {
+      "id": "S0.3.2.2",
+      "text": "Synthesised trace_id + error counter when none bound",
+      "verdict": "PASS",
+      "evidence": "logging.py:157-165; mutation M14 caught"
+    },
+    {
+      "id": "S0.3.2.3",
+      "text": "print( anywhere under src/ fails CI",
+      "verdict": "PASS_WITH_COMMENTS",
+      "evidence": "AST guard + ruff T20; print still flagged inside the exempt file. But sys.stdout.write is silently exempt in __main__.py contrary to the guard's own docstring (F4)"
+    },
+    {
+      "id": "S0.3.2.4",
+      "text": "debug may be sampled; error records are never sampled",
+      "verdict": "PASS",
+      "evidence": "executed: sample_rate=0.01 -> error 1000/1000, warning 1000/1000, info 8/1000, debug 8/1000; M5 and M32 caught"
+    },
+    {
+      "id": "S0.3.2.5",
+      "text": "Log level read from LOG_LEVEL in Settings",
+      "verdict": "PASS_WITH_COMMENTS",
+      "evidence": "configure_logging:271; M30 caught. But configure_logging has no caller in src at b96a740 (F5)"
+    },
+    {
+      "id": "S0.3.3.1",
+      "text": "Field absent from allow-list is dropped, not masked",
+      "verdict": "PASS",
+      "evidence": "_redact_mapping:718-720; M11 caught; homoglyph/fullwidth/zero-width/percent-encoded key names all dropped"
+    },
+    {
+      "id": "S0.3.3.2",
+      "text": "Credentials dropped by key-name pattern and by value shape",
+      "verdict": "FAIL",
+      "evidence": "F2: a credential inside a larger non-whitespace token (any object repr/str) is neither name- nor shape-detected and is emitted. Executed: log.info('config %r', cfg) emitted sk-proj-... verbatim"
+    },
+    {
+      "id": "S0.3.3.3",
+      "text": "Any value matching a presigned-URL shape is dropped entirely",
+      "verdict": "FAIL",
+      "evidence": "F1: detection only fires when the URL is whitespace-delimited or is the whole string. Executed: url=%s, '%s', <%s>, (%s), JSON-embedded and extra={'reason': 'GET <url> returned 403'} all emitted the full X-Amz-Signature"
+    },
+    {
+      "id": "S0.3.3.4",
+      "text": "User prompt emitted only as prompt_sha256 plus first 64 characters",
+      "verdict": "FAIL",
+      "evidence": "F3: summarise_prompt is exact (64), but prompt_preview is separately allow-listed as FieldKind.TEXT with MAX_TEXT_CHARS=1024. Executed: 975 raw PII characters emitted in one line"
+    },
+    {
+      "id": "S0.3.3.5",
+      "text": "Tripwire raises in dev/CI, drops+alarms in production, mode from ENV",
+      "verdict": "PASS",
+      "evidence": "tripwire_mode_for_env; M15/M16/M38 all caught; canary asserts both modes"
+    }
+  ],
+  "claims_tested": [
+    {
+      "claim": "make lint/type/test/check exit 0; 452 pass; observability 100% stmt+branch",
+      "result": "CONFIRMED_BY_EXECUTION",
+      "note": "lint=0 type=0 test=0; 452 passed, 2 deselected; all observability modules 100%. Caveat F7: 100% branch coverage does not exercise the ISO-BMFF fallback"
+    },
+    {
+      "claim": "52 codes cross-checked both directions including retryability",
+      "result": "CONFIRMED_BY_EXECUTION"
+    },
+    {
+      "claim": "Registry refuses unregistered/removed/reissued/repointed/retryability_changed",
+      "result": "CONFIRMED_BY_EXECUTION"
+    },
+    {
+      "claim": "Redaction is deny-by-default; unlisted fields dropped never masked",
+      "result": "CONFIRMED_BY_EXECUTION"
+    },
+    {
+      "claim": "Credentials dropped by name and by shape",
+      "result": "FALSIFIED",
+      "note": "F1, F2"
+    },
+    {
+      "claim": "print and sys.stdout/stderr.write banned by AST scan plus ruff T20; logging.* banned outside one module",
+      "result": "PARTIALLY_FALSIFIED",
+      "note": "F4 stdout exempt in __main__.py; F6 `import logging.handlers` bypasses the logger guard"
+    },
+    {
+      "claim": "Errors and warnings bypass sampling - 1000 emitted at 1%",
+      "result": "CONFIRMED_BY_EXECUTION"
+    },
+    {
+      "claim": "22 mutations run, 22 caught",
+      "result": "UNVERIFIABLE",
+      "note": "no record of which 22. 48 independent mutations: 44 caught, 4 real survivors (M13/G1 exemption widening, M37 ISO-BMFF, M51 stdout in __main__)"
+    },
+    {
+      "claim": "Tripwire must live in a Filter because Handler.emit swallows exceptions",
+      "result": "CONFIRMED_BY_EXPERIMENT",
+      "note": "RuntimeError from Formatter.format is swallowed and printed to stderr; the same error from Filter.filter propagates out of logger.info()"
+    },
+    {
+      "claim": "CI canary genuinely fails when a secret reaches a sink",
+      "result": "CONFIRMED_BY_EXECUTION",
+      "note": "four bypass payloads planted into _synthetic_job; canary failed on the exact planted value each time. The control test test_the_canary_can_actually_detect_a_leak is weak (re-searches an unredacted json.dumps) but the canary does not depend on it"
+    },
+    {
+      "claim": "MissingCredentialError = VA-INT-001 is a defensible fit",
+      "result": "AGREED_WITH_CAVEAT",
+      "note": "§6 defines no code for a locally absent credential; inventing one is exactly what registry.py refuses (E1 proves it fails CI). Cost: indistinguishable from a genuine internal bug in alerting and in ErrorCode.domain grouping - the flagged doc run is required, not optional. The 'response does not disclose which variable' half of the docstring is a promise about api.md §4 rendering that does not exist in this diff and is untested here; the log/stderr half holds (__main__.py:55 writes str(exc), which names the variable)"
+    },
+    {
+      "claim": "PRE_LOGGING_BOOTSTRAP_PATHS is narrow: sys.stderr only, one path not a directory",
+      "result": "PARTIALLY_FALSIFIED",
+      "note": "one-path-not-a-directory is true and tested; sys.stderr-only is false (F4) and the tuple's contents are unpinned"
+    },
+    {
+      "claim": "configure_logging() is called nowhere at startup",
+      "result": "CONFIRMED",
+      "note": "F5"
+    }
+  ],
+  "dimensions": {
+    "requirements": "3 of 15 acceptance criteria FAIL (S0.3.3.2/3/4). Taxonomy and logging halves are complete and well tested.",
+    "architecture_conformance": "Conforms. observability imports no domain module; codes single-sourced; trace_id via ContextVar; api.md §4 envelope fields (code, retryable, trace_id, message) all available on VideoAgentError.",
+    "regression_risk": "Low for existing modules. config/errors.py migration to enum members is behaviour-preserving and tested.",
+    "edge_cases": "Strong on typed shapes (bytes/bytearray/memoryview/SecretStr/homoglyph keys). Weak on string-embedded secrets - the entire detector chain is anchored at token start.",
+    "security": "Two confirmed latent credential-disclosure paths (F1, F2) and one PII-window bypass (F3). No active leak at this commit because configure_logging is never called (F5), which is itself the concern.",
+    "performance": "scan_payload runs per record over the full payload plus per whitespace token; acceptable at current volumes, worth revisiting when hot paths log per shot.",
+    "maintainability": "Excellent. Every constant carries a spec reference; guards are importable functions driven from tests rather than workflow-only greps.",
+    "test_coverage": "452 tests, 100% stmt+branch on observability, and 44/48 of my mutations caught. Gaps: exemption-list contents unpinned, ISO-BMFF fallback unexercised, no test for a secret preceded by punctuation.",
+    "confidence": "High. Every finding below was reproduced by execution against the committed code.",
+    "improvements": "Anchor detectors on substring search (re.finditer over a URL/secret pattern) rather than token-prefix match; split prompt_preview into its own FieldKind capped at PROMPT_PREVIEW_CHARS; pin PRE_LOGGING_BOOTSTRAP_PATHS by equality and add a stdout-in-bootstrap negative test; make get_logger fail loudly or lazily install when configure_logging has not run."
+  }
+}

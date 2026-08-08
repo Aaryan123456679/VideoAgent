@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "run_id": "013-implementation",
+  "status": "completed",
+  "committed": false,
+  "note": "Working tree left dirty on purpose: the brief said do not commit.",
+  "gates": {"lint": "pass", "type": "pass", "test": "1422 passed, 56 deselected", "baseline_tests": 919},
+  "findings": [
+    {"id": "CRITICAL-1", "where": "src/video_agent/observability/redaction.py:credential_candidates,_scan_string",
+     "tests": ["tests/unit/test_redaction.py::test_a_secret_is_never_emitted_whatever_surrounds_it",
+               "tests/unit/test_redaction.py::test_the_tripwire_fires_on_a_surrounded_secret"],
+     "mutation_evidence": "reverting candidate generation to (value, *value.split()) -> 269 failed"},
+    {"id": "CRITICAL-2", "where": "src/video_agent/observability/redaction.py:_CREDENTIAL_RUN_RE",
+     "tests": ["tests/unit/test_redaction.py::test_a_settings_object_repr_does_not_leak_its_token"],
+     "mutation_evidence": "same revert -> fails"},
+    {"id": "CRITICAL-3", "where": "src/video_agent/config/settings.py:describe_validation_error, src/video_agent/__main__.py:_safe_for_stderr",
+     "tests": ["tests/unit/test_entrypoint.py::test_a_settings_failure_names_every_missing_variable_without_printing_any_value",
+               "tests/unit/test_entrypoint.py::test_describe_validation_error_names_the_fields_and_omits_the_input",
+               "tests/unit/test_entrypoint.py::test_a_stderr_sentence_carrying_a_secret_is_replaced_rather_than_written"],
+     "mutation_evidence": "restoring exc.errors() with input -> 2 failed"},
+    {"id": "HIGH-prompt-preview", "where": "redaction.py FieldKind.PREVIEW/_clean_preview",
+     "mutation_evidence": "PREVIEW -> TEXT -> 3 failed"},
+    {"id": "HIGH-mypy-plugin", "where": "pyproject.toml [tool.pydantic-mypy]",
+     "mutation_evidence": "init_typed=false -> 2 failed"},
+    {"id": "HIGH-allowlist", "where": "tests/static_guards.py:ALLOWLISTED_PATHS",
+     "mutation_evidence": "restoring directory entries -> 5 failed"},
+    {"id": "MED-stdout-exemption", "where": "tests/static_guards.py:_stdio_write_stream/is_exempt_bootstrap_write",
+     "mutation_evidence": "stream-blind exemption -> 1 failed"},
+    {"id": "MED-logging-submodule", "where": "tests/static_guards.py:_binds_logging",
+     "mutation_evidence": "exact-name-only binding -> 2 failed"},
+    {"id": "MED-alias-precedence", "where": "src/video_agent/config/aliases.py:alias_search_roots/find_alias_file",
+     "mutation_evidence": "reversed order + removed log -> 3 failed"},
+    {"id": "MED-env-example-empties", "where": "tests/unit/test_settings.py:test_defaults_match_the_env_example_values",
+     "mutation_evidence": "changing ARTIFACT_ENDPOINT_URL/FFMPEG_BINARY defaults -> 1 failed"},
+    {"id": "MED-iso-bmff", "where": "tests/unit/test_redaction.py ISO_BMFF_BOXES",
+     "mutation_evidence": "offset-4 fallback -> return False -> 8 failed"},
+    {"id": "MED-formatException", "where": "src/video_agent/observability/logging.py:JsonFormatter",
+     "mutation_evidence": "delegating to super().format -> 1 failed"}
+  ],
+  "not_fixed": [
+    {"id": "MED-database-url-secretstr",
+     "reason": "SecretStr on DATABASE_URL/REDIS_URL requires src/video_agent/persistence/session.py and src/video_agent/api/clients.py, both owned by the concurrent T0.6 agent."}
+  ],
+  "files_touched_outside_ownership": [
+    {"path": "tests/unit/test_api_support.py", "lines": "35, 438", "reason": "the pydantic-mypy tightening surfaced a real arg-type error there; make type fails without it"},
+    {"path": "config/aliases.yaml", "lines": "2-7 (comment header only)", "reason": "the finding asked for the false 'only file' claim to be corrected"}
+  ]
+}

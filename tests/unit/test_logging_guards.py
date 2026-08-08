@@ -13,6 +13,7 @@ from pathlib import Path
 
 from tests.static_guards import (
     PRE_LOGGING_BOOTSTRAP_PATHS,
+    PRE_LOGGING_BOOTSTRAP_STREAM,
     STRUCTURED_LOGGING_MODULE,
     Violation,
     find_print_calls,
@@ -195,3 +196,69 @@ def test_no_other_module_inherits_the_bootstrap_exemption(tmp_path: Path) -> Non
     root = _fake_repo(tmp_path, {"src/video_agent/other.py": STDERR_MODULE})
 
     assert [violation.path for violation in find_print_calls(root)] == ["src/video_agent/other.py"]
+
+
+def test_the_bootstrap_may_not_write_to_stdout(tmp_path: Path) -> None:
+    """The exemption's docstring says `stderr`; the check has to agree with it.
+
+    It did not. `_is_stdio_write` matched both streams and the exemption was applied to the
+    result, so `sys.stdout.write` inside the exempt file was silently permitted — and `stdout`
+    is precisely the stream that must stay parseable, because in a container it is the one the
+    log collector reads.
+    """
+    root = _fake_repo(tmp_path, {PRE_LOGGING_BOOTSTRAP_PATHS[0]: STDOUT_MODULE})
+
+    violations = find_print_calls(root)
+
+    assert [violation.line for violation in violations] == [PLANTED_PRINT_LINE]
+    assert violations[0].path == PRE_LOGGING_BOOTSTRAP_PATHS[0]
+
+
+def test_the_bootstrap_exemption_is_pinned_to_exactly_one_file() -> None:
+    """Adding a second existing file to the tuple passed CI in silence.
+
+    Every assertion around it was written against `PRE_LOGGING_BOOTSTRAP_PATHS[0]`, so the
+    second entry was never looked at. `AGENT.md` §3 makes this one file architectural; pinning
+    the tuple is what makes "one file" checkable rather than merely intended.
+    """
+    assert PRE_LOGGING_BOOTSTRAP_PATHS == ("src/video_agent/__main__.py",)
+    assert PRE_LOGGING_BOOTSTRAP_STREAM == "stderr"
+
+
+# --- The unstructured-logger guard sees every import spelling ---------------------------------
+
+SUBMODULE_IMPORT_MODULE = "import logging.handlers\n\nlog = logging.getLogger(__name__)\n"
+ALIASED_SUBMODULE_MODULE = (
+    "import logging.config as logcfg\n\n\ndef go() -> None:\n    logcfg.basicConfig()\n"
+)
+
+
+def test_a_submodule_import_of_logging_is_caught(tmp_path: Path) -> None:
+    """`import logging.handlers` binds the name `logging`, exactly like `import logging`.
+
+    The alias scan recorded a binding only when `alias.name == "logging"`, so this spelling
+    produced no bindings at all and the guard returned before looking at a single call — while
+    `logging.getLogger` on the next line worked perfectly.
+    """
+    root = _fake_repo(tmp_path, {"src/video_agent/graph/nodes.py": SUBMODULE_IMPORT_MODULE})
+
+    violations = find_unstructured_loggers(root)
+
+    assert [violation.line for violation in violations] == [PLANTED_LOGGER_LINE]
+    assert "logging.getLogger" in violations[0].detail
+
+
+def test_an_aliased_submodule_import_of_logging_is_caught(tmp_path: Path) -> None:
+    root = _fake_repo(tmp_path, {"src/video_agent/graph/nodes.py": ALIASED_SUBMODULE_MODULE})
+
+    assert find_unstructured_loggers(root) != []
+
+
+def test_an_unrelated_module_whose_name_starts_with_logging_is_not_matched(
+    tmp_path: Path,
+) -> None:
+    """`loggingx` is a different distribution, not this one under another spelling."""
+    module = "import loggingx\n\nlog = loggingx.getLogger(__name__)\n"
+    root = _fake_repo(tmp_path, {"src/video_agent/graph/nodes.py": module})
+
+    assert find_unstructured_loggers(root) == []

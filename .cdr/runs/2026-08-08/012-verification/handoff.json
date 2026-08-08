@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "run": "2026-08-08/012-verification",
+  "agent": "verification",
+  "subtask": "T0.3",
+  "verdict": "CHANGES_REQUESTED",
+  "pointers": {
+    "verification": ".cdr/runs/2026-08-08/012-verification/verification.json",
+    "regressions": "index/regression.jsonl (REG-T0.3-001..007)",
+    "defect_sites": [
+      "src/video_agent/observability/redaction.py:526-539 (_scan_string token anchoring)",
+      "src/video_agent/observability/redaction.py:336 (_URL_SCHEME_RE start anchor)",
+      "src/video_agent/observability/redaction.py:352-377 (looks_like_secret / has_known_credential_prefix)",
+      "src/video_agent/observability/redaction.py:172,183 (prompt_preview as TEXT, MAX_TEXT_CHARS)",
+      "src/video_agent/observability/redaction.py:618-623 (_clean_text reuses _scan_string)",
+      "src/video_agent/observability/redaction.py:417-420 (ISO-BMFF fallback, untested)",
+      "tests/static_guards.py:375-387,411-421,441 (bootstrap exemption)",
+      "tests/static_guards.py:471-486 (_logging_aliases)",
+      "src/video_agent/observability/logging.py:245-272,275-282 (configure_logging unused, get_logger fail-open)"
+    ],
+    "scratchpad_artifacts": "/private/tmp/claude-501/-Users-aaryanmahajan-Main-Projects-Agentic-company-project/9244c61f-0d20-4389-92a1-c8da1ac34681/scratchpad (atk1-8.py, mut.py..mut5.py, mut*.log)"
+  }
+}

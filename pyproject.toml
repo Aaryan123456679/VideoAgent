@@ -135,11 +135,16 @@ ban-relative-imports = "all"
 [tool.mypy]
 python_version = "3.12"
 files = ["src", "tests"]
-# Pydantic's own plugin, not a relaxation. Without it mypy synthesises `Settings.__init__`
-# from the field declarations via `dataclass_transform` and then reports every required
-# variable as a missing argument at `Settings()` — which is exactly how a settings object is
-# meant to be constructed, since the values come from the environment. The plugin is what
-# teaches mypy that, and it tightens the checking of every other model at the same time.
+# Pydantic's own plugin. It is needed: without it mypy synthesises `Settings.__init__` from
+# the field declarations via `dataclass_transform` and then reports every required variable as
+# a missing argument at `Settings()` — which is exactly how a settings object is meant to be
+# constructed, since the values come from the environment.
+#
+# On its own, though, the plugin is a *relaxation*, not a tightening. Its `init_typed` defaults
+# to `false`, so the `__init__` it synthesises types every field as `Any` and constructor
+# argument checking disappears from every model in the tree. Measured on a probe module:
+# without the plugin, 6 errors including `Argument "weight" ... "str"; expected "int"`; with the
+# plugin and its defaults, 1. The `[tool.pydantic-mypy]` table below is what pays that back.
 plugins = ["pydantic.mypy"]
 strict = true
 disallow_any_generics = true
@@ -148,6 +153,15 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 pretty = true
 show_error_codes = true
+
+# The two settings that make the plugin above a net tightening rather than a net loss.
+# `init_typed` restores the field annotations on the synthesised `__init__`; without it a
+# model constructed with the wrong types anywhere in the tree type-checks clean.
+# `init_forbid_extra` makes a misspelled field name an error at the call site rather than a
+# value silently discarded by `extra="ignore"` at runtime.
+[tool.pydantic-mypy]
+init_typed = true
+init_forbid_extra = true
 
 # ---------------------------------------------------------------------------
 # Tests (pytest). S0.1.3: strict asyncio, strict markers, integration

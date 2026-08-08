@@ -41,11 +41,20 @@ from pathlib import Path, PurePosixPath
 ALLOWLISTED_PATHS: tuple[str, ...] = (
     # The one adapter that is allowed to know which provider it is talking to [D-06].
     "src/video_agent/providers/magichour.py",
-    # Typed settings and the alias-table loader.
-    "src/video_agent/config",
-    # config/aliases.yaml — the only file where a concrete model name may appear.
-    "config",
+    # The typed settings module, which pins the video model as a configurable default.
+    "src/video_agent/config/settings.py",
+    # The alias table itself, which is the whole point of the rule.
+    "config/aliases.yaml",
 )
+"""Every path exempt from the provider-name rule, by **exact file**, never by directory.
+
+`AGENT.md` §2 says of this guard: *do not add an exclusion to it*. A directory entry is an
+exclusion that has not been added yet — `src/video_agent/config` exempted every file under it,
+current and future, so a module dropped into that package next month would inherit an exemption
+nobody granted it. Three exact paths, and `test_the_allowlist_is_pinned_to_exactly_three_files`
+pins the tuple itself: asserting behaviour on a handful of sample paths let a fourth entry be
+added silently, which is how the directory entry survived review in the first place.
+"""
 
 SCANNED_ROOTS: tuple[str, ...] = ("src", "config")
 SCANNED_SUFFIXES: tuple[str, ...] = (".py", ".yaml", ".yml")
@@ -370,7 +379,15 @@ STRUCTURED_LOGGING_MODULE = "src/video_agent/observability/logging.py"
 `print` and no unstructured logger exists in the tree; a single accessor is what makes the rest
 of the rule checkable, because "unstructured" is otherwise a judgement call."""
 
-STDOUT_STREAMS: frozenset[str] = frozenset({"stdout", "stderr"})
+STDIO_STREAMS: frozenset[str] = frozenset({"stdout", "stderr"})
+
+PRE_LOGGING_BOOTSTRAP_STREAM: str = "stderr"
+"""The one stream the bootstrap exemption covers.
+
+`stdout` is the application's data channel and, in a container, the log stream the collector
+reads; a bare sentence there is indistinguishable from a log line and is what breaks a JSON
+parser. A diagnostic before logging exists belongs on `stderr` and nowhere else.
+"""
 
 PRE_LOGGING_BOOTSTRAP_PATHS: tuple[str, ...] = ("src/video_agent/__main__.py",)
 """Files that may write to `sys.stderr` because they run before logging can be configured.
@@ -381,9 +398,12 @@ unreadable* — and `configure_logging` needs `Settings`. A process refusing to 
 cannot read its own configuration has no `Settings`, no trace and no sink; a stderr sentence is
 the only thing it can honestly emit.
 
-The exemption is narrow in two directions. It covers `sys.stderr.write` only: `print` remains
-banned in this file like everywhere else. And it names one path, so a second module cannot
-inherit it by living in the same package.
+The exemption is narrow in three directions, and `tests/unit/test_logging_guards.py` pins each.
+It covers `sys.stderr.write` only, and `PRE_LOGGING_BOOTSTRAP_STREAM` is what makes that true
+rather than merely stated — the docstring said `stderr` while the check matched both streams,
+so `sys.stdout.write` could be added to the exempt file with every test still green. `print`
+remains banned here like everywhere else. And the tuple is pinned, so a second module cannot
+inherit the exemption by living in the same package.
 """
 
 UNSTRUCTURED_LOGGING_CALLS: frozenset[str] = frozenset(
@@ -408,17 +428,30 @@ the first module to use it decides the format for the whole process — usually 
 usually long before `configure_logging` runs."""
 
 
-def _is_stdio_write(node: ast.Call) -> bool:
+def _stdio_write_stream(node: ast.Call) -> str | None:
+    """Which standard stream this call writes to, or `None` if it is not such a call.
+
+    Returns the stream *name* rather than a boolean because the bootstrap exemption is about
+    one specific stream, and a boolean cannot carry that. Collapsing the two into "is a stdio
+    write" is what let the exemption cover `sys.stdout.write` while its docstring said stderr.
+    """
     func = node.func
     if not isinstance(func, ast.Attribute) or func.attr != "write":
-        return False
+        return None
     stream = func.value
-    return (
+    if (
         isinstance(stream, ast.Attribute)
-        and stream.attr in STDOUT_STREAMS
+        and stream.attr in STDIO_STREAMS
         and isinstance(stream.value, ast.Name)
         and stream.value.id == "sys"
-    )
+    ):
+        return stream.attr
+    return None
+
+
+def is_exempt_bootstrap_write(relative_path: str, stream: str) -> bool:
+    """Whether `relative_path` may write to `stream` because it predates logging."""
+    return stream == PRE_LOGGING_BOOTSTRAP_STREAM and relative_path in PRE_LOGGING_BOOTSTRAP_PATHS
 
 
 def find_print_calls(root: Path) -> list[Violation]:
@@ -438,7 +471,8 @@ def find_print_calls(root: Path) -> list[Violation]:
             if not isinstance(node, ast.Call):
                 continue
             is_print = isinstance(node.func, ast.Name) and node.func.id == "print"
-            is_stdio = _is_stdio_write(node) and relative not in PRE_LOGGING_BOOTSTRAP_PATHS
+            stream = _stdio_write_stream(node)
+            is_stdio = stream is not None and not is_exempt_bootstrap_write(relative, stream)
             if is_print or is_stdio:
                 violations.append(
                     Violation(
@@ -468,6 +502,21 @@ def _logging_call_name(node: ast.Call, logging_aliases: set[str]) -> str | None:
     return None
 
 
+def _binds_logging(alias: ast.alias) -> str | None:
+    """The local name an `import` statement binds to the `logging` package, if any.
+
+    `import logging.handlers` binds the name `logging` — the *package*, with the submodule
+    attached — so `logging.getLogger(...)` on the next line works exactly as it would after
+    `import logging`. Matching only `alias.name == "logging"` recorded no binding for that
+    spelling, and the guard then found nothing to check in the file at all.
+    """
+    if alias.name == "logging":
+        return alias.asname or alias.name
+    if alias.name.startswith("logging."):
+        return alias.asname or alias.name.partition(".")[0]
+    return None
+
+
 def _logging_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
     """Names bound to the `logging` module, and names bound to `logging.getLogger` itself."""
     modules: set[str] = set()
@@ -475,7 +524,7 @@ def _logging_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(
-                alias.asname or alias.name for alias in node.names if alias.name == "logging"
+                bound for alias in node.names if (bound := _binds_logging(alias)) is not None
             )
         elif isinstance(node, ast.ImportFrom) and node.module == "logging":
             functions.update(

@@ -9,18 +9,22 @@ from __future__ import annotations
 
 import dataclasses
 from decimal import Decimal
+from logging import INFO
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 import yaml
 
+from tests.unit.test_app_shell import captured_logs
 from video_agent.config.aliases import (
     ALIAS_FILE_RELATIVE_PATH,
     Alias,
     AliasEntry,
     AliasTable,
     ModelPrice,
+    alias_search_roots,
+    find_alias_file,
     get_alias_table,
     load_alias_table,
 )
@@ -28,6 +32,9 @@ from video_agent.config.errors import VA_GW_002, AliasConfigError
 
 PRICE = {"input_usd_per_1k_tokens": "0.001", "output_usd_per_1k_tokens": "0.002"}
 CEILING = {"input_usd_per_1k_tokens": "0.05", "output_usd_per_1k_tokens": "0.15"}
+MOUNTED_MODEL = "vendor-mounted/model-1"
+PACKAGED_MODEL = "vendor-packaged/model-1"
+
 CANARY_TRAFFIC_PCT = 10  # `[CPS §Rollout]` — model changes go to 10% of traffic first.
 
 # The real table's prices, transcribed independently of config/aliases.yaml. A silent edit to
@@ -287,3 +294,101 @@ def test_resolve_fails_closed_on_an_absent_alias(tmp_path: Path) -> None:
 
     with pytest.raises(AliasConfigError):
         stripped.resolve(Alias.EMBED_DEFAULT)
+
+
+# --- Which copy of the table wins -----------------------------------------------------------
+#
+# The file has two homes on purpose: the copy an operator mounts at `config/aliases.yaml`, and
+# the copy the wheel force-includes into `site-packages/video_agent/config/aliases.yaml`. Both
+# are present in every containerised deployment, so precedence is not an edge case — it decides
+# which model every job in the fleet runs on.
+
+
+def _table_naming(model: str) -> dict[str, Any]:
+    document = _document()
+    document["aliases"]["reasoning-high"] = {"primary": {"model": model}}
+    document["prices"][model] = dict(PRICE)
+    return document
+
+
+def _install_both_copies(tmp_path: Path) -> tuple[Path, Path]:
+    """A mounted checkout and an installed package, each with its own table.
+
+    `module_dir` is the package's `config/` directory, so the wheel's table sits one level
+    above it at `video_agent/config/aliases.yaml` — the layout the force-include produces, and
+    the reason the module-relative walk found it before it ever reached the cwd.
+    """
+    working_dir = tmp_path / "srv" / "app"
+    module_dir = tmp_path / "site-packages" / "video_agent" / "config"
+    module_dir.mkdir(parents=True)
+
+    mounted = working_dir / ALIAS_FILE_RELATIVE_PATH
+    packaged = module_dir.parent / ALIAS_FILE_RELATIVE_PATH
+    for path, model in ((mounted, MOUNTED_MODEL), (packaged, PACKAGED_MODEL)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(_table_naming(model)), encoding="utf-8")
+    return working_dir, module_dir
+
+
+def test_the_mounted_table_wins_over_the_one_baked_into_the_image(tmp_path: Path) -> None:
+    """`[CPS §Model routing]` — a model swap is a config change with zero code diff.
+
+    The module-relative walk ran first, so `site-packages/video_agent/config/aliases.yaml`
+    always won. An operator editing the mounted table and restarting got the build-time model
+    back, with no warning and nothing in the log naming the file that was actually read. A
+    zero-code-diff mechanism that a rebuild silently overrides is not a mechanism.
+    """
+    working_dir, module_dir = _install_both_copies(tmp_path)
+
+    resolved = find_alias_file(alias_search_roots(working_dir, module_dir))
+
+    assert resolved is not None
+    assert load_alias_table(resolved).resolve(Alias.REASONING_HIGH).primary.model == MOUNTED_MODEL
+
+
+def test_the_search_puts_the_working_directory_before_the_package(tmp_path: Path) -> None:
+    """The precedence, asserted on the order itself rather than only on its consequence."""
+    working_dir = tmp_path / "srv" / "app"
+    module_dir = tmp_path / "site-packages" / "video_agent" / "config"
+
+    roots = alias_search_roots(working_dir, module_dir)
+
+    assert roots == (working_dir.resolve(), module_dir.resolve())
+
+
+def test_the_packaged_table_is_used_when_nothing_is_mounted(tmp_path: Path) -> None:
+    """The fallback still has to work: a deployment that mounts nothing runs on the wheel's."""
+    _, module_dir = _install_both_copies(tmp_path)
+    empty = tmp_path / "empty" / "workdir"
+    empty.mkdir(parents=True)
+
+    resolved = find_alias_file(alias_search_roots(empty, module_dir))
+
+    assert resolved is not None
+    assert load_alias_table(resolved).resolve(Alias.REASONING_HIGH).primary.model == PACKAGED_MODEL
+
+
+def test_nothing_found_anywhere_is_reported_rather_than_guessed(tmp_path: Path) -> None:
+    empty = tmp_path / "nowhere"
+    empty.mkdir()
+
+    assert find_alias_file(alias_search_roots(empty, empty)) is None
+
+
+def test_the_resolved_path_is_named_in_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An operator whose restart changed nothing must be able to see which file was read.
+
+    Asserted through the real handler, so the line has been past the redaction tripwire: a
+    startup message that trips the wire outside production *raises*, which would turn a
+    diagnostic into a refusal to start.
+    """
+    path = _write(tmp_path, _document())
+
+    with caplog.at_level(INFO), captured_logs() as lines:
+        load_alias_table(path)
+
+    loaded = [line for line in lines if line.get("event") == "alias_table_loaded"]
+    assert len(loaded) == 1
+    assert str(path) in str(loaded[0]["msg"])

@@ -34,13 +34,18 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from video_agent.config.errors import MissingCredentialError
+from video_agent.observability.redaction import contains_never_logged_value
 
 CREDITS_PER_RATE_UNIT = Decimal(1000)
 """The provider quotes its rate per 1,000 credits, so the per-credit rate divides by this."""
+
+REDACTED_DETAIL = "<redacted: the message carried a value that must never be emitted>"
+"""Stands in for a per-error message the scanner refused. The *name* is never redacted, so an
+operator still learns which variable is wrong even when the reason cannot be shown."""
 
 
 class Settings(BaseSettings):
@@ -191,6 +196,34 @@ class Settings(BaseSettings):
             message = f"{name} is empty; it is required to {purpose}. Set it in .env."
             raise MissingCredentialError(message)
         return secret
+
+
+def describe_validation_error(exc: ValidationError) -> str:
+    """A configuration failure rendered as variable names and reasons, and nothing else.
+
+    `str(exc)` is not usable on any emission path. Pydantic's `missing` error carries
+    `input_value`, and for a settings model that is the **entire collected settings dict** — so
+    a deployment missing `DATABASE_URL` prints every environment variable it *did* find,
+    including `MAGICHOUR_API_KEY`, straight into the failure message. `AGENT.md` §3 forbids
+    exactly this and names API keys and DB URLs while doing it.
+
+    The leak is intermittent, which is what makes it dangerous: pydantic truncates a long
+    `input_value` repr, so a fully-populated environment hides it and the sparse,
+    half-configured deployment — the one that actually hits this path — does not.
+
+    `include_input=False` is the fix; the scanner pass over each reason is the belt to its
+    braces, applied per error so one unshowable reason does not take the other names down with
+    it. The acceptance criterion — one message naming *every* missing variable — is preserved,
+    because `loc` is the field name and a field name is not a secret.
+    """
+    lines = []
+    for error in exc.errors(include_input=False, include_url=False, include_context=False):
+        name = ".".join(str(part) for part in error["loc"]) or exc.title
+        reason = error["msg"]
+        lines.append(
+            f"{name}: {reason if not contains_never_logged_value(reason) else REDACTED_DETAIL}"
+        )
+    return "; ".join(lines)
 
 
 @lru_cache(maxsize=1)

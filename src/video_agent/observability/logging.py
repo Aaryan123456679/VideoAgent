@@ -209,6 +209,28 @@ class JsonFormatter(logging.Formatter):
 
     Serialises but does not enforce: `TripwireFilter` has already inspected this record and
     either raised or counted, so scanning again here would only double the alarm.
+
+    **`formatException` is never called, and that is a decision rather than an omission.**
+    `logging.Formatter.format` normally appends the traceback to the message; this override
+    does not, so `exc_info=` and `logger.exception(...)` contribute `exc_type` and nothing else.
+    Three reasons, in order of how hard they are to argue with:
+
+    1. A traceback is multi-line by construction. `observability.md` §4 is one JSON object per
+       line, and appending a traceback to `msg` produces a value whose newlines survive into
+       whatever the aggregator splits on.
+    2. A frame renders its arguments. `AGENT.md` §3 forbids raw PII and credentials, and the
+       call that failed is very often the one that was holding the key.
+    3. The exception *message* is upstream-controlled text with no schema — a driver quoting
+       the DSN it could not connect to, a provider echoing the request it rejected. No
+       `FieldKind` describes "whatever the other end decided to say".
+
+    The scanner is now strong enough that a redacted exception message is technically
+    available, and the decision is still not to take it automatically. What is offered instead
+    is the same capability, opt-in and attributable: a caller who has judged the message worth
+    keeping passes `reason=f"{type(exc).__name__}: {exc}"`, which is an allow-listed `TEXT`
+    field, is scanned by the same rules and is dropped whole if it trips. The difference is
+    that someone chose it for that call site, which is exactly the property automatic inclusion
+    would remove.
     """
 
     def format(self, record: logging.LogRecord) -> str:
