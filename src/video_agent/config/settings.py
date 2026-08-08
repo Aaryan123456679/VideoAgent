@@ -95,8 +95,20 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: SecretStr = SecretStr("")
 
     # --- Persistence --------------------------------------------------------------------
-    DATABASE_URL: str
-    REDIS_URL: str
+    # `SecretStr`, because the canonical DSN form of both embeds a password in its userinfo:
+    # `postgresql+asyncpg://user:hunter2@host/db`, `redis://:hunter2@host:6379/0`. The
+    # credential convention in this file is suffix-driven — `_KEY`, `_SECRET` — and `_URL` is
+    # not one of those suffixes, so these two were the only variables carrying a password that
+    # rendered in full under `repr`, `str`, `model_dump`, `model_dump_json` and every f-string.
+    #
+    # The structured-logging path already defended them twice over, by name
+    # (`CREDENTIAL_KEY_PHRASES` lists `database_url` and `redis_url`) and by shape
+    # (`is_credentialed_url`). What the wrapper closes is everywhere else a value travels:
+    # a driver's exception message, an HTTP error body, a traceback, a debugger frame. None of
+    # those is an emission path anybody redacts, and `AGENT.md` §3 names DB URLs on the
+    # never-logged list without qualifying which path they were on.
+    DATABASE_URL: SecretStr
+    REDIS_URL: SecretStr
 
     # --- Artifact storage ---------------------------------------------------------------
     ARTIFACT_BUCKET: str = "video-agent-artifacts"

@@ -131,8 +131,16 @@ def create_database_engine(settings: Settings, *, echo: bool = False) -> AsyncEn
     `pool_pre_ping` because the failure it prevents is the one that matters here — a
     connection the pool believes is alive after a database restart produces a spurious
     `VA-STORE-003` on the first query of an otherwise healthy job.
+
+    `get_secret_value()` is called here and in exactly one other place per URL. `DATABASE_URL`
+    is a `SecretStr` because its canonical form carries a password, and the plaintext exists
+    for the width of this one argument: it is handed straight to the driver, never bound to a
+    local, never interpolated into a message. An unwrap anywhere else is the thing to look for
+    in a diff.
     """
-    return create_async_engine(settings.DATABASE_URL, echo=echo, pool_pre_ping=True)
+    return create_async_engine(
+        settings.DATABASE_URL.get_secret_value(), echo=echo, pool_pre_ping=True
+    )
 
 
 @asynccontextmanager

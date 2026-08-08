@@ -120,8 +120,8 @@ async def test_the_key_is_read_per_request_so_an_unset_one_fails_only_at_call_ti
     """
     settings = Settings(
         MAGICHOUR_API_KEY=SecretStr(""),
-        DATABASE_URL="postgresql+asyncpg://u:p@localhost/db",
-        REDIS_URL="redis://localhost:6379/0",
+        DATABASE_URL=SecretStr("postgresql+asyncpg://u:p@localhost/db"),
+        REDIS_URL=SecretStr("redis://localhost:6379/0"),
         LITELLM_MASTER_KEY=SecretStr(""),
     )
     seen: list[httpx.Request] = []

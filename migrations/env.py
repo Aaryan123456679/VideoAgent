@@ -61,8 +61,13 @@ def lock_budget_statements() -> tuple[str, ...]:
 
 
 def database_url() -> str:
-    """The URL every migration runs against: the application's own configured database."""
-    return Settings().DATABASE_URL
+    """The URL every migration runs against: the application's own configured database.
+
+    Unwrapped from `SecretStr` here because Alembic's config takes a plain string. The
+    unwrapping is at the point of use, and the result is handed to `context.configure` and to
+    `async_engine_from_config` without being logged or interpolated on the way.
+    """
+    return Settings().DATABASE_URL.get_secret_value()
 
 
 def run_migrations_offline() -> None:

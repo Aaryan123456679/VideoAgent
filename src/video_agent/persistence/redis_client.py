@@ -223,8 +223,15 @@ def create_redis_client(settings: Settings) -> Redis:
     The concrete return type is what lets one client serve both `RedisStore` and
     `persistence.queue.JobQueue`: each declares the narrow protocol it needs, and `Redis`
     satisfying both is checked here rather than asserted in a comment.
+
+    `REDIS_URL` is a `SecretStr` and is unwrapped here and nowhere else in this module. The
+    plaintext lives for the width of one argument and goes straight to the driver; the module
+    docstring's claim that no message names the connection target holds because the string is
+    never bound to a name that a message could reach.
     """
-    client: Redis = Redis.from_url(settings.REDIS_URL, decode_responses=DECODE_RESPONSES)
+    client: Redis = Redis.from_url(
+        settings.REDIS_URL.get_secret_value(), decode_responses=DECODE_RESPONSES
+    )
     return client
 
 

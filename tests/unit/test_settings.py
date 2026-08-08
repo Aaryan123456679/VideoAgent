@@ -32,6 +32,15 @@ PLANTED_SECRETS: dict[str, str] = {
     "AWS_SECRET_ACCESS_KEY": "PLANTED_object_store_secret",
 }
 
+# The two variables whose *canonical* form embeds a password in its userinfo. The credential
+# convention in `settings.py` is suffix-driven and `_URL` is not one of the suffixes, so these
+# escaped it entirely until they became `SecretStr`.
+PLANTED_DSN_MARKER = "PLANTED_dsn_marker_value"
+PLANTED_URLS: dict[str, str] = {
+    "DATABASE_URL": f"postgresql+asyncpg://user:{PLANTED_DSN_MARKER}@localhost:5432/videoagent",
+    "REDIS_URL": f"redis://:{PLANTED_DSN_MARKER}@localhost:6379/0",
+}
+
 SettingsFactory = Callable[..., Settings]
 
 # The repair budget the PRD commits to. `QC_MAX_REPAIR_ATTEMPTS` accepts this and nothing else.
@@ -184,10 +193,53 @@ def test_secrets_never_stringify(build_settings: SettingsFactory) -> None:
         "LANGFUSE_SECRET_KEY",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
+        # Not a `_KEY` and not a `_SECRET`, and that is precisely why both were plain `str`
+        # while carrying a password. The rule is what the value holds, not how it is spelled.
+        "DATABASE_URL",
+        "REDIS_URL",
     ],
 )
 def test_credentials_are_secret_str(field: str) -> None:
     assert Settings.model_fields[field].annotation is SecretStr
+
+
+@pytest.mark.parametrize("rendering", ["str", "repr", "fstring", "model_dump", "model_dump_json"])
+def test_connection_urls_never_render_their_password(
+    build_settings: SettingsFactory, rendering: str
+) -> None:
+    """`DATABASE_URL` and `REDIS_URL` carry a password; no rendering of `Settings` shows it.
+
+    Five renderings rather than one because they are five different code paths in pydantic and
+    a wrapper that covered `repr` but not `model_dump` would look fixed. `model_dump` is the
+    one that matters most in practice: it is what a debugger's variable pane, a `pytest`
+    assertion diff and a hand-rolled error body all reach for, and none of those passes through
+    `observability.redaction`.
+    """
+    settings = build_settings(**PLANTED_URLS)
+    renderings: dict[str, str] = {
+        "str": str(settings),
+        "repr": repr(settings),
+        "fstring": f"{settings}",
+        "model_dump": str(settings.model_dump()),
+        "model_dump_json": settings.model_dump_json(),
+    }
+
+    assert PLANTED_DSN_MARKER not in renderings[rendering], renderings[rendering][:200]
+
+
+def test_the_connection_urls_are_still_usable_after_wrapping(
+    build_settings: SettingsFactory,
+) -> None:
+    """Guards the guard: a wrapper that hid the value from its own consumers would also pass.
+
+    Without this, deleting the `.get_secret_value()` calls in `persistence.session` and
+    `persistence.redis_client` would leave the redaction assertions green while no process
+    could connect to anything.
+    """
+    settings = build_settings(**PLANTED_URLS)
+
+    assert settings.DATABASE_URL.get_secret_value() == PLANTED_URLS["DATABASE_URL"]
+    assert settings.REDIS_URL.get_secret_value() == PLANTED_URLS["REDIS_URL"]
 
 
 def test_resolution_literal_rejects_4k(build_settings: SettingsFactory) -> None:
