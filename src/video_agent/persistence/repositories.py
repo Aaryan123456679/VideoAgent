@@ -29,13 +29,19 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import RowMapping
 
 from video_agent.observability.codes import ErrorCode
 from video_agent.observability.errors import VideoAgentError
-from video_agent.persistence.enums import ArtifactKind, AttemptState, BeatKind, JobStatus
+from video_agent.persistence.enums import (
+    ArtifactKind,
+    AttemptState,
+    BeatKind,
+    JobOutcome,
+    JobStatus,
+)
 from video_agent.persistence.schema import (
     artifact,
     beat,
@@ -342,6 +348,35 @@ class JobRepository(_Repository):
         """Read one job. Returns None for another tenant's job, because RLS filtered it."""
         row = await self._fetch_one(select(*_JOB_COLUMNS).where(job.c.id == job_id))
         return None if row is None else _job_record(row, created=False)
+
+    async def finalize(
+        self,
+        job_id: UUID,
+        *,
+        outcome: JobOutcome,
+        degraded: bool,
+        degraded_reason: str | None,
+        terminal_reason_code: str | None,
+        budget_used: dict[str, Any],
+    ) -> None:
+        """Write the one terminal decision a job gets. Only the `finalize` node calls this.
+
+        No `RETURNING`: the caller already holds the `Decision` it is recording here, and
+        projecting the same values back out would be read by nothing.
+        """
+        statement = (
+            update(job)
+            .where(job.c.id == job_id, job.c.tenant_id == self.tenant_id)
+            .values(
+                status=JobStatus.TERMINAL.value,
+                outcome=outcome.value,
+                degraded=degraded,
+                degraded_reason=degraded_reason,
+                terminal_reason_code=terminal_reason_code,
+                budget_used=budget_used,
+            )
+        )
+        await self._session.execute(statement)
 
 
 class StoryPlanRepository(_Repository):
