@@ -4,11 +4,11 @@ Mirrors `gateway.errors.GatewayError`'s three-fact shape exactly — the failure
 `gateway.md` §4.5 asks for is not an LLM-gateway-specific idea, it is a `[CPS §Failure
 behaviour]` promise, and this module inherits the shape rather than reinventing it.
 
-Only the codes T2.1 owns are defined here: `VA-PROV-001/003/005/006/009` plus the negotiation
-failure `VA-PROV-002`. `VA-PROV-007/008/010/011/012/013` are concrete Magic-Hour HTTP-status
-mappings (`providers.md` §7.4) and belong to T2.2, once an adapter exists to raise them —
-minting them here now would be a code with no call site, and every code in `codes.py` already
-exists, so none of this is invented `[D-55]`.
+`VA-PROV-007/008/010/011/012/013` are the T2.2 additions: the concrete HTTP-status and
+terminal-state mappings from `providers.md` §7.4, added once the concrete adapter existed to
+raise them. Every code was already declared in `codes.py`, so none of this is invented `[D-55]`.
+This module stays provider-agnostic — the error *shapes* are generic, only the adapter module
+decides which upstream status maps to which one.
 """
 
 from __future__ import annotations
@@ -20,11 +20,17 @@ __all__ = [
     "NOTHING_PRESERVED",
     "NoProviderSatisfiesCapabilitiesError",
     "PromptExceedsLimitError",
+    "ProviderCredentialRejectedError",
     "ProviderError",
     "ProviderGroupExhaustedError",
     "ProviderPaymentRequiredError",
+    "ProviderProjectNotFoundError",
+    "ProviderRenderCanceledError",
+    "ProviderRenderFailedError",
+    "ProviderRequestRejectedError",
     "ProviderTimeoutError",
     "ProviderUnavailableError",
+    "ProviderUnprocessableEntityError",
 ]
 
 NOTHING_PRESERVED = "no partial result — the call produced nothing to keep"
@@ -154,4 +160,102 @@ class ProviderPaymentRequiredError(ProviderError):
                 "top up the provider account; this failure is not retried and does not fail "
                 "over to another provider."
             ),
+        )
+
+
+class ProviderRequestRejectedError(ProviderError):
+    """The provider rejected the request as malformed (`400`). `providers.md` §7.4.
+
+    A programming/config error, not a transient one: retrying the same bad request produces
+    the same rejection, so this is never retried.
+    """
+
+    code = ErrorCode.VA_PROV_007
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            what_happened=message,
+            what_was_preserved=NOTHING_PRESERVED,
+            what_to_do_next="fix the request shape; this is a configuration defect, not a fluke.",
+        )
+
+
+class ProviderCredentialRejectedError(ProviderError):
+    """The provider rejected the credential (`401`). `providers.md` §7.4.
+
+    A credential fault, not a job failure — the shot is not retried against a key that will
+    fail identically on the next attempt; the caller escalates instead.
+    """
+
+    code = ErrorCode.VA_PROV_008
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            what_happened=message,
+            what_was_preserved=NOTHING_PRESERVED,
+            what_to_do_next="escalate: the configured provider credential is rejected upstream.",
+        )
+
+
+class ProviderProjectNotFoundError(ProviderError):
+    """The provider has no record of this project id (`404`). `providers.md` §7.4.
+
+    Treated as an orphaned attempt: whatever this process believed had been submitted, the
+    provider no longer has any memory of it.
+    """
+
+    code = ErrorCode.VA_PROV_010
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            what_happened=message,
+            what_was_preserved=NOTHING_PRESERVED,
+            what_to_do_next="treat the attempt as orphaned; a fresh attempt is not a duplicate.",
+        )
+
+
+class ProviderUnprocessableEntityError(ProviderError):
+    """The provider rejected the request as unprocessable (`422`). `providers.md` §7.4.
+
+    Usually a content-duration violation. Never repaired when content-related `[D-42]` — a
+    request the provider refuses to render at all is not a candidate for a repair delta.
+    """
+
+    code = ErrorCode.VA_PROV_011
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            what_happened=message,
+            what_was_preserved=NOTHING_PRESERVED,
+            what_to_do_next="do not repair; the content itself is what the provider refused.",
+        )
+
+
+class ProviderRenderFailedError(ProviderError):
+    """The render reached terminal `status: error`. `providers.md` §7.4.
+
+    Carries the upstream `error.code`/`error.message` in `message`. A failed attempt, and
+    unlike `VA-PROV-011`, eligible for repair — the render itself failed, not the request.
+    """
+
+    code = ErrorCode.VA_PROV_012
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            what_happened=message,
+            what_was_preserved=NOTHING_PRESERVED,
+            what_to_do_next="eligible for repair; the render failed, the request was valid.",
+        )
+
+
+class ProviderRenderCanceledError(ProviderError):
+    """The render reached terminal `status: canceled`. `providers.md` §7.4. Treated as failed."""
+
+    code = ErrorCode.VA_PROV_013
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            what_happened=message,
+            what_was_preserved=NOTHING_PRESERVED,
+            what_to_do_next="eligible for repair; the render was canceled, the request was valid.",
         )
