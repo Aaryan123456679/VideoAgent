@@ -11,6 +11,8 @@ second, shorter call never happens.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 from pydantic import BaseModel
 
@@ -18,7 +20,7 @@ from tests.gateway_doubles import MODEL_A, ScriptedTransport, a_request, ok
 from tests.gateway_doubles import build_harness as build
 from video_agent.gateway import CallContext, LLMRequest
 from video_agent.gateway.errors import ContextLengthExceededError, StructuredOutputError
-from video_agent.gateway.gateway import REFORMAT_DIRECTIVE
+from video_agent.gateway.gateway import REFORMAT_DIRECTIVE, _widen_schema_const_to_enum
 from video_agent.gateway.transport import UpstreamStatusError
 from video_agent.observability.codes import ErrorCode
 
@@ -140,3 +142,35 @@ async def test_context_length_exceeded_raises_gw_005_and_truncates_nothing() -> 
     assert caught.value.code is ErrorCode.VA_GW_005
     assert len(transport.calls) == 1
     assert transport.calls[0].max_output_tokens == A_LARGE_OUTPUT_BUDGET
+
+
+class _AspectRatio(BaseModel):
+    """A single-value `Literal` field, exactly the shape Pydantic renders as `const`."""
+
+    aspect_ratio: Literal["16:9"] = "16:9"
+
+
+def test_widen_schema_const_to_enum_rewrites_a_nested_const() -> None:
+    """Vertex/Gemini's structured-output dialect rejects `const`; `enum` with one member is the
+    same constraint in a shape every provider accepts."""
+    schema = _AspectRatio.model_json_schema()
+    assert schema["properties"]["aspect_ratio"]["const"] == "16:9"
+
+    widened = _widen_schema_const_to_enum(schema)
+
+    assert "const" not in widened["properties"]["aspect_ratio"]
+    assert widened["properties"]["aspect_ratio"]["enum"] == ["16:9"]
+
+
+@pytest.mark.asyncio
+async def test_a_request_for_a_model_with_a_literal_field_sends_enum_not_const() -> None:
+    """The rewrite is actually applied on the request path, not just unit-tested in isolation."""
+    transport = ScriptedTransport({MODEL_A: [ok('{"aspect_ratio": "16:9"}')]})
+    harness = build(transport)
+    await harness.gateway.call(
+        a_request(response_model=_AspectRatio), ctx=CallContext(job_id="j", node="bible")
+    )
+    sent_schema = transport.calls_for(MODEL_A)[0].response_schema
+    assert sent_schema is not None
+    assert "const" not in sent_schema["properties"]["aspect_ratio"]
+    assert sent_schema["properties"]["aspect_ratio"]["enum"] == ["16:9"]

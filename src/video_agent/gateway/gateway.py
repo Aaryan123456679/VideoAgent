@@ -172,6 +172,36 @@ class _CallPlan:
     started: float
 
 
+type _JSONNode = str | int | float | bool | list["_JSONNode"] | dict[str, "_JSONNode"] | None
+
+
+def _widen_schema_const_to_enum(schema: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite every `{"const": x}` in a JSON schema to `{"enum": [x]}`, recursively.
+
+    Pydantic emits `const` for a single-value `Literal` field (`aspect_ratio: Literal["16:9"]`),
+    which is valid JSON Schema but outside one alias-group member's reduced structured-output
+    dialect — a real request with such a field anywhere in the schema comes back
+    `400 INVALID_ARGUMENT: Unknown name "const"`. `enum` with one member accepts exactly the same
+    values `const` does, so this is a strict widening, never a validation change, and is applied
+    unconditionally rather than gated by model — a schema every provider accepts is not a schema
+    any provider need be protected from.
+    """
+    widened = _widen_node(schema)
+    assert isinstance(widened, dict)  # a dict in, a dict out; recursion preserves shape
+    return widened
+
+
+def _widen_node(node: _JSONNode) -> _JSONNode:
+    if isinstance(node, dict):
+        widened = {key: _widen_node(value) for key, value in node.items()}
+        if "const" in widened:
+            widened["enum"] = [widened.pop("const")]
+        return widened
+    if isinstance(node, list):
+        return [_widen_node(item) for item in node]
+    return node
+
+
 class LiteLLMGateway:
     """The single egress. Constructed once per process and shared."""
 
@@ -409,7 +439,11 @@ class LiteLLMGateway:
             instruction = f"{instruction}\n\n{REFORMAT_DIRECTIVE}"
             if idempotency is not None:
                 idempotency = f"{idempotency}{REFORMAT_IDEMPOTENCY_SUFFIX}"
-        schema = req.response_model.model_json_schema() if req.response_model is not None else None
+        schema = (
+            _widen_schema_const_to_enum(req.response_model.model_json_schema())
+            if req.response_model is not None
+            else None
+        )
         return TransportCall(
             model=model,
             instruction=instruction,
