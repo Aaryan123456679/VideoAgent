@@ -23,6 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from video_agent.harness.context import NodeContext
 
 __all__ = [
+    "ArtifactStore",
     "Capability",
     "ProviderHealth",
     "ProviderProfile",
@@ -160,6 +161,20 @@ class ProviderRegistry(Protocol):
     def select(self, required: frozenset[Capability]) -> list[VideoProvider]: ...
 
     async def generate(self, req: ShotRequest, *, ctx: NodeContext) -> ShotResult: ...
+
+
+class ArtifactStore(Protocol):
+    """Bytes in, bytes out, by `ArtifactRef`. Shared by a concrete `VideoProvider` (which
+    reads a conditioning frame and writes a rendered clip through it) and by `graph.deps.
+    GraphDeps.artifacts` (which a graph node uses the same way — see `graph/nodes.py`'s T2.3
+    functions). One protocol rather than two independently-typed ones is what lets a single
+    store instance serve both call sites; `gateway.transport.LLMTransport` uses the same
+    pattern for the wire itself.
+    """
+
+    async def read(self, ref: ArtifactRef) -> bytes: ...
+
+    async def write(self, *, content_type: str, data: bytes) -> ArtifactRef: ...
 
 
 def compute_request_fingerprint(

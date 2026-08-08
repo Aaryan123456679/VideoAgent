@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -58,7 +58,13 @@ from video_agent.providers.errors import (
     ProviderUnavailableError,
     ProviderUnprocessableEntityError,
 )
-from video_agent.providers.models import Capability, ProviderHealth, ProviderProfile, ShotResult
+from video_agent.providers.models import (
+    ArtifactStore,
+    Capability,
+    ProviderHealth,
+    ProviderProfile,
+    ShotResult,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Iterator
@@ -344,16 +350,6 @@ def _raise_for_status(status_code: int, message: str) -> None:
     if server_error_or_rate_limited:
         raise ProviderUnavailableError(message)
     raise ProviderRequestRejectedError(message)
-
-
-class ArtifactStore(Protocol):
-    """Bytes in, bytes out, by `ArtifactRef`. No object-store client exists in this repo yet
-    (T2.3/T2.4), so this adapter depends on the shape it needs rather than a concrete one —
-    the same pattern `gateway.transport.LLMTransport` uses for the wire itself."""
-
-    async def read(self, ref: ArtifactRef) -> bytes: ...
-
-    async def write(self, *, content_type: str, data: bytes) -> ArtifactRef: ...
 
 
 @dataclass

@@ -25,11 +25,12 @@ makes the operation happen once. `[D-16]` for the job, `[D-24]` and `[D-67]` for
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, and_, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import RowMapping
 
@@ -75,6 +76,12 @@ class JobRecord:
     music_bed: bool
     budget_caps: dict[str, Any]
     budget_epoch: int
+    outcome: JobOutcome | None
+    degraded: bool
+    degraded_reason: str | None
+    budget_used: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
     created: bool
     """False when this call adopted a job an earlier identical request had already created."""
 
@@ -352,6 +359,29 @@ class JobRepository(_Repository):
         row = await self._fetch_one(select(*_JOB_COLUMNS).where(job.c.id == job_id))
         return None if row is None else _job_record(row, created=False)
 
+    async def list_page(
+        self, *, limit: int, before: tuple[datetime, UUID] | None = None
+    ) -> list[JobRecord]:
+        """One page of this tenant's jobs, newest first, using the `job_tenant_created_idx`.
+
+        Keyset pagination on `(created_at, id)` rather than `OFFSET`: `before` is the last row
+        the caller already has, and the page is everything strictly older than it in that
+        ordering. A row inserted mid-pagination sorts ahead of every cursor already handed out,
+        so it lands on a page the caller has not reached yet rather than shifting one already
+        served — which is what makes paging stable without a snapshot.
+        """
+        statement = select(*_JOB_COLUMNS).order_by(job.c.created_at.desc(), job.c.id.desc())
+        if before is not None:
+            created_at, job_id = before
+            statement = statement.where(
+                or_(
+                    job.c.created_at < created_at,
+                    and_(job.c.created_at == created_at, job.c.id < job_id),
+                )
+            )
+        result = await self._session.execute(statement.limit(limit))
+        return [_job_record(row, created=False) for row in result.mappings()]
+
     async def finalize(
         self,
         job_id: UUID,
@@ -433,6 +463,22 @@ class StoryPlanRepository(_Repository):
         row = await self._fetch_one(select(*_PLAN_COLUMNS).where(story_plan.c.job_id == job_id))
         return None if row is None else _plan_record(row)
 
+    async def get_beat_id(self, job_id: UUID, idx: int) -> UUID | None:
+        """The id of the beat at `idx` for one job's locked plan, or None.
+
+        `ShotRepository.ensure` needs a real `beat.id` to satisfy `shot.beat_id`'s foreign
+        key, and nothing else in this module has ever needed to read a beat back — `create`
+        writes the four rows and returns none of their ids. Joining through `story_plan`
+        rather than adding a `job_id` column to `beat` keeps `beat` free of a column that
+        would only exist for this one lookup.
+        """
+        row = await self._fetch_one(
+            select(beat.c.id)
+            .select_from(beat.join(story_plan, beat.c.story_plan_id == story_plan.c.id))
+            .where(story_plan.c.job_id == job_id, beat.c.idx == idx)
+        )
+        return None if row is None else row["id"]
+
 
 class ContinuityBibleRepository(_Repository):
     """The bible. Written once; there is deliberately no update method."""
@@ -492,6 +538,45 @@ class ShotRepository(_Repository):
         """Read one shot."""
         row = await self._fetch_one(select(*_SHOT_COLUMNS).where(shot.c.id == shot_id))
         return None if row is None else _shot_record(row)
+
+    async def ensure(self, *, job_id: UUID, beat_id: UUID, idx: int) -> ShotRecord:
+        """Create the shot in `pending`, or adopt the row an earlier call already created.
+
+        Nothing upstream of `generate_shot` calls `ShotRepository.create` today — shots are
+        planned in memory (`JobState.shots`) but never given a Postgres row until the first
+        attempt needs one to satisfy `shot_attempt.shot_id`'s foreign key. `[D-67]` makes
+        `generate_shot` itself redeliverable at least once, so this follows the same
+        `ON CONFLICT DO NOTHING` plus fallback read as `JobRepository.create`: the unique
+        constraint on `(job_id, idx)`, not a prior `SELECT`, is what makes a
+        second call for the same shot adopt the first row instead of racing it.
+        """
+        statement = (
+            insert(shot)
+            .values(
+                id=uuid4(),
+                job_id=job_id,
+                tenant_id=self.tenant_id,
+                beat_id=beat_id,
+                idx=idx,
+            )
+            .on_conflict_do_nothing(constraint="shot_job_idx_uq")
+            .returning(*_SHOT_COLUMNS)
+        )
+        result = await self._session.execute(statement)
+        row = result.mappings().first()
+        if row is not None:
+            return _shot_record(row)
+
+        existing = await self._fetch_one(
+            select(*_SHOT_COLUMNS).where(shot.c.job_id == job_id, shot.c.idx == idx)
+        )
+        if existing is None:
+            message = (
+                "the shot_job_idx_uq constraint fired but the winning row is not visible "
+                "from this tenant's session"
+            )
+            raise VideoAgentError(message)
+        return _shot_record(existing)
 
 
 class ShotAttemptRepository(_Repository):
@@ -630,6 +715,18 @@ class ArtifactRepository(_Repository):
         result = await self._session.execute(statement)
         return _artifact_record(result.mappings().one())
 
+    async def get(self, artifact_id: UUID) -> ArtifactRecord | None:
+        """Read one artifact's metadata by id, or None.
+
+        `generate_shot_node` and `extract_final_frame_node` (T2.3) both need to resolve a
+        `state`-carried artifact id — `last_good_frame_artifact_id`, `clip_artifact_id` —
+        back into a `storage_key` before they can build the `ArtifactRef` a provider or the
+        bytes store expects; `list_for_job` exists but forces every caller to fetch and
+        filter the whole job's catalogue for one row.
+        """
+        row = await self._fetch_one(select(*_ARTIFACT_COLUMNS).where(artifact.c.id == artifact_id))
+        return None if row is None else _artifact_record(row)
+
     async def list_for_job(self, job_id: UUID) -> list[ArtifactRecord]:
         """Every artifact recorded for one job."""
         result = await self._session.execute(
@@ -685,6 +782,12 @@ _JOB_COLUMNS = (
     job.c.music_bed,
     job.c.budget_caps,
     job.c.budget_epoch,
+    job.c.outcome,
+    job.c.degraded,
+    job.c.degraded_reason,
+    job.c.budget_used,
+    job.c.created_at,
+    job.c.updated_at,
 )
 _PLAN_COLUMNS = (
     story_plan.c.id,
@@ -757,6 +860,12 @@ def _job_record(row: RowMapping, *, created: bool) -> JobRecord:
         music_bed=row["music_bed"],
         budget_caps=row["budget_caps"],
         budget_epoch=row["budget_epoch"],
+        outcome=JobOutcome(row["outcome"]) if row["outcome"] is not None else None,
+        degraded=row["degraded"],
+        degraded_reason=row["degraded_reason"],
+        budget_used=row["budget_used"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
         created=created,
     )
 

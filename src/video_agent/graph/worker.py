@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -31,7 +32,9 @@ from video_agent.graph.guard import JobHarness
 from video_agent.graph.lock import JobLock, LockToken
 from video_agent.graph.state import SHOT_COUNT, JobState
 from video_agent.harness.budget import BudgetCaps, BudgetLedger
+from video_agent.harness.cancel import CancelRequest
 from video_agent.observability.errors import VideoAgentError
+from video_agent.persistence.keys import cancel_signal_key
 from video_agent.persistence.queue import Delivery, JobQueue
 from video_agent.persistence.repositories import JobRepository
 from video_agent.persistence.session import tenant_session
@@ -40,9 +43,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from video_agent.gateway.gateway import Gateway
+    from video_agent.persistence.redis_client import RedisStore
     from video_agent.persistence.repositories import JobRecord
+    from video_agent.providers.models import ArtifactStore, ProviderRegistry
 
-__all__ = ["JobNotFoundError", "JobWorker"]
+__all__ = ["JobNotFoundError", "JobWorker", "WorkerResources"]
 
 HEARTBEAT_INTERVAL_S: float = 20.0
 """Well under `JOB_LOCK_TTL_SECONDS` (60s, `[D-10]`) — several heartbeats before a lock could
@@ -52,9 +57,28 @@ ORPHAN_MIN_IDLE_MS: int = 90_000
 """A margin over the lock TTL: an entry idle this long was held by a worker whose lock has
 already lapsed, not one running a slow superstep."""
 
+CANCEL_POLL_INTERVAL_S: float = 3.0
+"""How often this worker checks `persistence.keys.cancel_signal_key` for the job it is running.
+`api.jobs.cancel_job` is the writer; this is the reader side of that contract."""
+
 
 class JobNotFoundError(VideoAgentError):
     """A queue entry named a job with no row. The queue outlived the job it pointed to."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerResources:
+    """The per-process dependencies threaded into every job's `GraphDeps`.
+
+    Grouped separately from the worker's own loop dependencies (`queue`, `lock`,
+    `cancel_store`) because these four are what a job's compiled graph needs, and nothing
+    about the queue/lock/cancel machinery belongs on that object.
+    """
+
+    engine: AsyncEngine
+    gateway: Gateway
+    providers: ProviderRegistry
+    artifacts: ArtifactStore
 
 
 class JobWorker:
@@ -71,15 +95,18 @@ class JobWorker:
         consumer: str,
         queue: JobQueue,
         lock: JobLock,
-        engine: AsyncEngine,
-        gateway: Gateway,
+        resources: WorkerResources,
+        cancel_store: RedisStore,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._consumer = consumer
         self._queue = queue
         self._lock = lock
-        self._engine = engine
-        self._gateway = gateway
+        self._engine = resources.engine
+        self._gateway = resources.gateway
+        self._providers = resources.providers
+        self._artifacts = resources.artifacts
+        self._cancel_store = cancel_store
         self._clock = clock
 
     async def run_forever(self, *, poll_block_ms: int = 5000) -> None:
@@ -139,9 +166,31 @@ class JobWorker:
             checkpointer=InMemorySaver(),
             harness=harness,
             now=self._clock,
+            providers=self._providers,
+            artifacts=self._artifacts,
         )
         compiled = build_graph(deps)
-        await compiled.ainvoke(state, config={"configurable": {"thread_id": str(job_id)}})
+        cancel_task = asyncio.create_task(self._poll_cancel(harness, job_id))
+        try:
+            await compiled.ainvoke(state, config={"configurable": {"thread_id": str(job_id)}})
+        finally:
+            cancel_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_task
+
+    async def _poll_cancel(self, harness: JobHarness, job_id: UUID) -> None:
+        """Read `persistence.keys.cancel_signal_key` until `api.jobs.cancel_job` writes one.
+
+        `harness` is the same object every router's `guard()` call reads via `deps.harness`
+        for this run, so setting `.cancel` here takes effect on the very next `decide()` —
+        no separate plumbing back into the graph is needed.
+        """
+        while True:
+            raw = await self._cancel_store.get(cancel_signal_key(job_id))
+            if raw is not None:
+                harness.cancel = CancelRequest.model_validate_json(raw)
+                return
+            await asyncio.sleep(CANCEL_POLL_INTERVAL_S)
 
 
 def _fresh_state(job: JobRecord) -> JobState:

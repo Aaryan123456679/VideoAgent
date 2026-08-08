@@ -31,6 +31,7 @@ from fastapi import FastAPI
 from video_agent.api.clients import default_factories
 from video_agent.api.handlers import register_exception_handlers
 from video_agent.api.health import router as health_router
+from video_agent.api.jobs import router as jobs_router
 from video_agent.api.middleware import RequestBoundaryMiddleware
 from video_agent.api.resources import Resources, open_resources
 from video_agent.config.settings import get_settings
@@ -86,4 +87,5 @@ def create_app(
     app.add_middleware(RequestBoundaryMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(jobs_router)
     return app

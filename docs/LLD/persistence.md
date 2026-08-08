@@ -320,6 +320,7 @@ Cache, locks, rate limits, idempotency, progress. `[CPS §Canonical stack]`
 | `rl:{tenant}:{window}` | string | window | Rate limit token bucket |
 | `cb:{dependency}` | hash | 5m | Circuit-breaker state, shared across workers |
 | `cache:llm:{hash}` | string | 1h | Gateway response cache (never for planning/bible) |
+| `job:{job_id}:cancel` | string | 24h | Cooperative cancel signal for the harness loop `[D-12]` |
 
 ### 5.1 The job queue `[D-67]`
 

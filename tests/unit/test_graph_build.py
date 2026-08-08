@@ -45,6 +45,8 @@ def a_deps() -> GraphDeps:
         checkpointer=InMemorySaver(),
         harness=JobHarness(job_id=uuid4(), shots_required=4),
         now=lambda: now,
+        providers=cast(Any, None),
+        artifacts=cast(Any, None),
     )
 
 

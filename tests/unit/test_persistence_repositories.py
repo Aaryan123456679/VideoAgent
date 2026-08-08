@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Iterator, Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -125,6 +126,12 @@ def _job_row(**overrides: object) -> dict[str, Any]:
         "music_bed": False,
         "budget_caps": {},
         "budget_epoch": 0,
+        "outcome": None,
+        "degraded": False,
+        "degraded_reason": None,
+        "budget_used": {},
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 1, 1, tzinfo=UTC),
     }
     row.update(overrides)
     return row

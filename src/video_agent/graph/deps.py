@@ -19,6 +19,7 @@ from video_agent.graph.guard import JobHarness
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from video_agent.gateway.gateway import Gateway
+    from video_agent.providers.models import ArtifactStore, ProviderRegistry
 
 __all__ = ["GraphDeps"]
 
@@ -35,6 +36,21 @@ class GraphDeps:
     machinery `graph.md`'s own status header defers to E3 — building it early would be building
     E3 ahead of the E1/E2 slice this session is scoped to. This is a documented v1 gap, not a
     silent one.
+
+    `providers` and `artifacts` were added for T2.3 (`generate_shot_node`/
+    `extract_final_frame_node`); neither existed when `plan_story_node`/`lock_bible_node` were
+    built, since those nodes never touch a provider or an object store.
+
+    `artifacts` is typed as `providers.models.ArtifactStore` — the bytes-in/bytes-out protocol a
+    concrete `VideoProvider` is itself constructed with — rather than `persistence.objects.
+    ArtifactStore`'s local-file interface. `generate_shot_node` only ever needs to read back a
+    clip a provider already stored (to checksum it before cataloguing it) and
+    `extract_final_frame_node` only ever needs to write a PNG it already holds in memory;
+    neither needs a filesystem path. Reusing the protocol the provider layer already depends on
+    means one shared artifact store for the whole per-job pipeline rather than two disagreeing
+    object-store abstractions. See the T2.3 task report for the full reasoning and the
+    production-wiring assumption this implies (that whoever constructs a job's `GraphDeps` hands
+    the same store instance to both `providers` and `artifacts`).
     """
 
     engine: AsyncEngine
@@ -42,3 +58,5 @@ class GraphDeps:
     checkpointer: BaseCheckpointSaver[Any]
     harness: JobHarness
     now: Callable[[], datetime]
+    providers: ProviderRegistry
+    artifacts: ArtifactStore

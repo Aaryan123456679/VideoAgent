@@ -51,6 +51,7 @@ class KeyName(StrEnum):
     RATE_LIMIT = "rate_limit"
     CIRCUIT_BREAKER = "circuit_breaker"
     LLM_CACHE = "llm_cache"
+    CANCEL_SIGNAL = "cancel_signal"
 
 
 class RedisType(StrEnum):
@@ -131,6 +132,10 @@ true, so a crashed writer has to stop being the writer quickly or the job stalls
 PROGRESS_TTL_SECONDS: Final = SECONDS_PER_HOUR
 CIRCUIT_BREAKER_TTL_SECONDS: Final = 300
 LLM_CACHE_TTL_SECONDS: Final = SECONDS_PER_HOUR
+CANCEL_SIGNAL_TTL_SECONDS: Final = 24 * SECONDS_PER_HOUR
+"""Generous rather than tied to a job's own wall-clock cap: the registry has no per-job number
+to reach for, and a stray flag under a tiny string key costs nothing to leave a day longer.
+The worker deletes it once the harness observes it, so the ordinary lifetime is seconds."""
 
 KEY_REGISTRY: Final[dict[KeyName, KeySpec]] = {
     KeyName.IDEMPOTENCY: KeySpec(
@@ -188,6 +193,13 @@ KEY_REGISTRY: Final[dict[KeyName, KeySpec]] = {
         ttl_policy=TtlPolicy.FIXED,
         ttl_seconds=LLM_CACHE_TTL_SECONDS,
         purpose="Gateway response cache; never for planning or the bible",
+    ),
+    KeyName.CANCEL_SIGNAL: KeySpec(
+        pattern="job:{job_id}:cancel",
+        redis_type=RedisType.STRING,
+        ttl_policy=TtlPolicy.FIXED,
+        ttl_seconds=CANCEL_SIGNAL_TTL_SECONDS,
+        purpose="Cooperative cancel signal for the job's harness loop [D-12]",
     ),
 }
 """`persistence.md` §5, transcribed once. `test_all_documented_keys_have_constructors` diffs
@@ -343,6 +355,29 @@ def llm_cache_key(request_hash: str) -> RedisKey:
     return _render(KeyName.LLM_CACHE, hash=request_hash)
 
 
+def cancel_signal_key(job_id: UUID) -> RedisKey:
+    """`job:{job_id}:cancel` — the cooperative cancel flag `harness.cancel` and `api.jobs` share.
+
+    **The cross-process cancel contract, spelled out once, here.** `POST /v1/jobs/{id}/cancel`
+    runs in an API worker process; the `JobHarness` that can actually act on a cancellation
+    lives inside a *different* process — the graph worker — and the two share nothing in
+    memory. This key is the entire handoff:
+
+    - **Written by** the API route, as the JSON serialisation of a
+      `harness.cancel.CancelRequest` (`{"actor": "client", "requested_at": "<UTC ISO-8601>",
+      "reason": "<string, may be empty>"}`) — always `actor: "client"` from this route, because
+      v1 ships no operator-cancel surface.
+    - **Read by** the worker, once per superstep, immediately before `decide()` — so a cancel
+      takes effect at the next node boundary and never mid-write `[D-12]`. A hit is parsed with
+      `CancelRequest.model_validate_json` and handed to the in-process `JobHarness`.
+    - **TTL** `CANCEL_SIGNAL_TTL_SECONDS` (24h), so a signal for a job whose worker never comes
+      back is not immortal. Redis is not authoritative here either: the job's own `status`
+      column in Postgres is what a caller reads back, and a lost signal simply means the next
+      `POST .../cancel` (idempotent) tries again.
+    """
+    return _render(KeyName.CANCEL_SIGNAL, job_id=str(job_id))
+
+
 KEY_CONSTRUCTORS: Final[dict[KeyName, str]] = {
     KeyName.IDEMPOTENCY: idempotency_key.__name__,
     KeyName.JOB_LOCK: job_lock_key.__name__,
@@ -352,6 +387,7 @@ KEY_CONSTRUCTORS: Final[dict[KeyName, str]] = {
     KeyName.RATE_LIMIT: rate_limit_key.__name__,
     KeyName.CIRCUIT_BREAKER: circuit_breaker_key.__name__,
     KeyName.LLM_CACHE: llm_cache_key.__name__,
+    KeyName.CANCEL_SIGNAL: cancel_signal_key.__name__,
 }
 """Registry entry to the function that renders it. The test resolves each name against this
 module, so an entry naming a function that does not exist is a failure rather than a comment."""

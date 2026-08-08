@@ -5,9 +5,10 @@ Every router calls `guard()` first (`graph.md` §3.1) — a reflective CI test i
 themselves; a node's job is to do one unit of work and report what changed, and the harness
 veto is applied once, uniformly, by the router that follows it.
 
-**`generate_shot`, `extract_final_frame`, `assemble`, `deliver` are stubs.** Their real bodies
-are T2.3/T2.4, tracked separately — wiring them up is what makes a job produce an actual video.
-The topology compiles and the planning/selection/finalization path is real without them.
+**`generate_shot` and `extract_final_frame` are real as of T2.3** — the provider
+submit/poll/settle sequence and ffmpeg frame extraction described in their own docstrings below.
+**`assemble` and `deliver` remain T2.4 stubs**; wiring them up is what makes a job produce a
+finished, delivered video rather than four accepted, chained clips.
 
 **`qc_shot` is a stub of a different kind.** `graph.md`'s v1 status header is explicit that
 QC scoring and repair are deferred to E3/`S3.2.2`; this node unconditionally accepts every shot
@@ -16,26 +17,53 @@ rather than scoring it. The marker below is what `S3.2.2`'s test asserts has bee
 
 from __future__ import annotations
 
+import asyncio
+import tempfile
+from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
+from video_agent.gateway.models import ArtifactRef
 from video_agent.graph.deps import GraphDeps
+from video_agent.graph.frame_extraction import STEP_BACK_ATTEMPTS, find_last_usable_frame
 from video_agent.graph.guard import guard
 from video_agent.graph.state import GraphInvariantError, JobState, ShotState
+from video_agent.harness.budget import Charge, ChargeState
 from video_agent.harness.context import NodeContext
+from video_agent.persistence.enums import ArtifactKind, ShotStatus
+from video_agent.persistence.enums import AttemptState as PersistenceAttemptState
 from video_agent.persistence.enums import BeatKind as PersistenceBeatKind
 from video_agent.persistence.enums import JobOutcome as PersistenceJobOutcome
-from video_agent.persistence.enums import ShotStatus
+from video_agent.persistence.objects import sha256_of
 from video_agent.persistence.repositories import (
+    ArtifactRecord,
+    ArtifactRepository,
+    AttemptClaim,
+    AttemptRequest,
+    CheckpointRepository,
     ContinuityBibleRepository,
+    CostSettlement,
     JobRepository,
+    NewArtifact,
+    NewCheckpoint,
     NewContinuityBible,
     NewStoryPlan,
+    ProviderSubmission,
+    ShotAttemptRepository,
+    ShotRepository,
     StoryPlanRepository,
 )
 from video_agent.persistence.session import tenant_session
 from video_agent.planning.service import lock_bible as lock_bible_domain
 from video_agent.planning.service import plan_story as plan_story_domain
+from video_agent.providers.compose import ComposedPrompt, compose_prompt
+from video_agent.providers.models import (
+    Capability,
+    ShotRequest,
+    ShotResult,
+    compute_request_fingerprint,
+)
 
 __all__ = [
     "assemble_node",
@@ -182,17 +210,308 @@ async def route_select(state: JobState, deps: GraphDeps) -> str:
 
 
 # ---------------------------------------------------------------------------
-# generate_shot / extract_final_frame — T2.3, stubbed here
+# generate_shot / extract_final_frame — T2.3
 # ---------------------------------------------------------------------------
+
+_DEFAULT_MAX_PROMPT_CHARS = 4000
+"""Fallback `compose_prompt` limit when no provider currently satisfies the shot's required
+capabilities. Composition still runs so the later `deps.providers.generate()` call raises
+`NoProviderSatisfiesCapabilitiesError` with a specific message, rather than the composer
+failing first with a less informative one."""
+
+_PROVIDER_TIMEOUT_S = 180.0
+"""One shot's submit-plus-poll ceiling. `GraphDeps` carries no settings object and
+`ShotRequest.timeout_s` has no default, so this is a deliberate constant rather than a
+per-provider value; `MagicHourProvider`'s own `typical_latency_s` is 60s, so 180s leaves
+headroom for a slow render without a node that can hang indefinitely."""
+
+_SHOT_CLIP_CONTENT_TYPE = "video/mp4"
+_CONTINUITY_FRAME_CONTENT_TYPE = "image/png"
+"""`[D-44]`: every continuity anchor is lossless PNG."""
+
+
+def _required_capabilities(*, conditioning_frame_present: bool) -> frozenset[Capability]:
+    """`providers.md` §3's negotiation table, inlined rather than called through
+    `providers.negotiate.required_for` because that helper takes a fully-built `ShotRequest`
+    and this needs the answer *before* the prompt (and therefore the request) exists — the
+    provider's `max_prompt_chars` is itself an input to composing the prompt.
+    """
+    required = {Capability.DURATION_10S, Capability.ASPECT_16_9, Capability.RES_720P}
+    if conditioning_frame_present:
+        required.add(Capability.IMAGE_CONDITIONING)
+    return frozenset(required)
+
+
+def _artifact_ref(record: ArtifactRecord) -> ArtifactRef:
+    """A catalogued artifact, as the bytes store and the provider layer address it."""
+    return ArtifactRef(artifact_id=str(record.id), storage_key=record.storage_key)
+
+
+async def _resolve_conditioning(
+    state: JobState, deps: GraphDeps
+) -> tuple[ArtifactRef | None, bool, str | None]:
+    """Chaining (`providers.md` §6, `[D-05]`): shot 0 is text-only by definition and that is
+    never degraded. A later shot chains the most recent accepted frame; if none exists (every
+    predecessor was abandoned), it also generates text-only, but that *is* flagged degraded.
+
+    Returns `(conditioning_ref, degraded, degraded_reason)`.
+    """
+    if state.shot_index == 0:
+        return None, False, None
+    if state.last_good_frame_artifact_id is None:
+        degraded_reason = (
+            f"shot {state.shot_index} has no accepted predecessor frame; generating "
+            "text-only from the bible and beat `[D-05]`"
+        )
+        return None, True, degraded_reason
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        frame_record = await ArtifactRepository(session).get(state.last_good_frame_artifact_id)
+    if frame_record is None:
+        message = (
+            f"artifact {state.last_good_frame_artifact_id} named by "
+            f"last_good_frame_artifact_id was not found for job {state.job_id}"
+        )
+        raise GraphInvariantError(message)
+    return _artifact_ref(frame_record), False, None
+
+
+async def _claim_shot_attempt(
+    state: JobState,
+    deps: GraphDeps,
+    *,
+    attempt_no: int,
+    fingerprint: str,
+    composed: ComposedPrompt,
+    bible_hash: str,
+) -> AttemptClaim:
+    """Phase 1 (`graph.md` §4): insert the `ShotAttempt` as `in_flight`, committed before the
+    provider is ever called `[D-24]`. `ShotRepository.ensure` is what makes this redeliverable
+    `[D-67]`: nothing upstream gives a shot a Postgres row until its first attempt needs one.
+    """
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        beat_id = await StoryPlanRepository(session).get_beat_id(state.job_id, state.shot_index)
+        if beat_id is None:
+            message = f"no locked beat found for job {state.job_id} shot {state.shot_index}"
+            raise GraphInvariantError(message)
+        shot_row = await ShotRepository(session).ensure(
+            job_id=state.job_id, beat_id=beat_id, idx=state.shot_index
+        )
+        return await ShotAttemptRepository(session).claim(
+            AttemptRequest(
+                shot_id=shot_row.id,
+                job_id=state.job_id,
+                attempt_no=attempt_no,
+                request_fingerprint=fingerprint,
+                prompt_text=composed.text,
+                prompt_hash=composed.prompt_hash,
+                bible_hash=bible_hash,
+                conditioning_frame_id=state.last_good_frame_artifact_id,
+            )
+        )
+    # `claim.adopted` means a redelivered call already owns this fingerprint. Full
+    # crash-reconciliation via `lookup()` needs a *pinned* `VideoProvider`, not the
+    # registry-level `ProviderRegistry` protocol this node is handed (only `select`/`generate`;
+    # see `providers/models.py`) — a documented v1 gap. The fingerprint's unique constraint
+    # still makes a second attempt row impossible either way; only the provider-side
+    # double-submit guard is unavailable at this layer today.
+
+
+@dataclass(frozen=True, slots=True)
+class _GenerateOutcome:
+    """Everything phase 3 needs about what phase 2 produced, as one value rather than seven
+    positional facts `_settle_shot_and_checkpoint` would otherwise have to keep in order.
+    """
+
+    claim: AttemptClaim
+    result: ShotResult
+    clip_bytes: bytes
+    checksum: str
+    attempt_no: int
+    degraded: bool
+    degraded_reason: str | None
+
+
+async def _settle_shot_and_checkpoint(
+    state: JobState, deps: GraphDeps, *, shot: ShotState, outcome: _GenerateOutcome
+) -> dict[str, Any]:
+    """Phase 3 (`graph.md` §4): settle the cost, catalogue the clip, and checkpoint — one
+    transaction, so a crash here is a repeated node on resume, never an unrecorded one.
+    """
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        await ShotAttemptRepository(session).settle_cost(
+            outcome.claim.attempt.id,
+            CostSettlement(
+                state=PersistenceAttemptState.SUCCEEDED,
+                cost_usd=outcome.result.cost_usd,
+                credits_charged=outcome.result.credits_charged,
+            ),
+        )
+        artifact_record = await ArtifactRepository(session).record(
+            NewArtifact(
+                job_id=state.job_id,
+                kind=ArtifactKind.SHOT_CLIP,
+                storage_key=outcome.result.clip.storage_key,
+                content_type=_SHOT_CLIP_CONTENT_TYPE,
+                size_bytes=len(outcome.clip_bytes),
+                checksum_sha256=outcome.checksum,
+                shot_index=state.shot_index,
+            )
+        )
+
+        updated_shot = shot.model_copy(
+            update={"attempts_used": outcome.attempt_no, "clip_artifact_id": artifact_record.id}
+        )
+        shots = tuple(updated_shot if s.index == state.shot_index else s for s in state.shots)
+        partial: dict[str, Any] = {"shots": shots, "budget": state.budget}
+        if outcome.degraded:
+            partial["degraded"] = True
+            partial["degraded_reason"] = outcome.degraded_reason
+        snapshot = state.model_copy(update=partial)
+
+        latest_checkpoint = await CheckpointRepository(session).latest(state.job_id)
+        next_seq = 0 if latest_checkpoint is None else latest_checkpoint.seq + 1
+        await CheckpointRepository(session).write(
+            NewCheckpoint(
+                thread_id=state.job_id,
+                node="generate_shot",
+                seq=next_seq,
+                state=snapshot.model_dump(mode="json"),
+                budget_used={
+                    "usd_spent": str(state.budget.usd_spent),
+                    "tokens_used": state.budget.tokens_used,
+                    "iterations_used": state.budget.iterations_used,
+                },
+            )
+        )
+    return partial
 
 
 async def generate_shot_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
     """T2.3: submit the current shot to a provider via the three-phase write sequence
     (`graph.md` §4, `[D-23]`/`[D-24]`/`[D-58]`) and chain from `last_good_frame_artifact_id`.
+
+    Three phases, three transactions, exactly as `graph.md` §4 spells out: (1) `_claim_shot_
+    attempt` inserts the attempt as `in_flight`, committed before the provider is ever called;
+    (2) call the provider, then immediately persist `provider_project_id`; (3) `_settle_shot_
+    and_checkpoint` settles the cost, catalogues the clip, and writes a checkpoint, all in one
+    transaction.
+
+    **Known v1 gap** (documented in the T2.3 task report, not silent): `MagicHourProvider.
+    generate()` (T2.2, frozen) submits and polls to completion in one call, so phase (2)'s
+    `record_submission` happens right after the whole call returns rather than the instant the
+    provider accepts the submission — the provider layer exposes no submit-only hook a caller
+    could use to persist the id before the poll loop runs. A crash during that poll therefore
+    leaves an `in_flight` attempt with no `provider_project_id`, which is a narrower window than
+    `[D-24]` designs for but not a wider one: nothing is billed and nothing is lost, resume
+    simply cannot skip straight to reconciliation for a crash in that specific window.
     """
-    del state, deps
-    message = "generate_shot_node is a T2.3 stub; the provider adapter is not wired in yet"
-    raise NotImplementedError(message)
+    if state.story_plan is None or state.bible is None or state.bible_hash is None:
+        message = (
+            f"generate_shot reached for job {state.job_id} without a locked plan and bible; "
+            "route_after_bible should have caught it"
+        )
+        raise GraphInvariantError(message)
+    bible_hash = state.bible_hash
+
+    shot = state.shots[state.shot_index]
+    beat = state.story_plan.beats[state.shot_index]
+    conditioning_ref, degraded, degraded_reason = await _resolve_conditioning(state, deps)
+
+    ctx = NodeContext.for_node(
+        job_id=state.job_id,
+        node="generate_shot",
+        trace_id=state.trace_id,
+        budget_remaining=state.budget.view(deps.now()),
+        bible=state.bible,
+        beat=beat,
+        chained_frame_ref=conditioning_ref,
+    )
+    ctx.require_tool("video.generate")
+
+    candidates = deps.providers.select(
+        _required_capabilities(conditioning_frame_present=conditioning_ref is not None)
+    )
+    max_chars = min(
+        (candidate.profile.max_prompt_chars for candidate in candidates),
+        default=_DEFAULT_MAX_PROMPT_CHARS,
+    )
+    composed = compose_prompt(state.bible, beat, max_chars=max_chars)
+
+    attempt_no = shot.repairs_used + 1
+    frame_id = str(state.last_good_frame_artifact_id) if conditioning_ref is not None else None
+    fingerprint = compute_request_fingerprint(
+        job_id=state.job_id,
+        shot_index=state.shot_index,
+        attempt_no=attempt_no,
+        prompt_hash=composed.prompt_hash,
+        frame_id=frame_id,
+        seed=None,
+    )
+
+    claim = await _claim_shot_attempt(
+        state,
+        deps,
+        attempt_no=attempt_no,
+        fingerprint=fingerprint,
+        composed=composed,
+        bible_hash=bible_hash,
+    )
+
+    shot_request = ShotRequest(
+        job_id=state.job_id,
+        shot_index=state.shot_index,
+        attempt_no=attempt_no,
+        prompt=composed.text,
+        conditioning_frame=conditioning_ref,
+        duration_s=beat.duration_s,
+        request_fingerprint=fingerprint,
+        timeout_s=_PROVIDER_TIMEOUT_S,
+    )
+
+    # Phase 2: call the provider. Deliberately outside any DB transaction `[D-23]`.
+    result = await deps.providers.generate(shot_request, ctx=ctx)
+    if result.degraded and result.degrade_reason:
+        degraded = True
+        degraded_reason = (
+            result.degrade_reason
+            if degraded_reason is None
+            else f"{degraded_reason}; {result.degrade_reason}"
+        )
+
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        await ShotAttemptRepository(session).record_submission(
+            claim.attempt.id,
+            ProviderSubmission(
+                provider_project_id=result.provider_project_id,
+                provider_key=result.provider_key,
+                provider_model=result.provider_model,
+                seed=result.seed_used,
+                seed_supported=result.seed_used is not None,
+            ),
+        )
+
+    ctx.require_tool("artifact.write")
+    clip_bytes = await deps.artifacts.read(result.clip)
+    checksum = sha256_of(clip_bytes)
+    state.budget.apply(
+        Charge(
+            charge_id=fingerprint,
+            usd=result.cost_usd,
+            tokens=0,
+            state=ChargeState.FINAL if result.cost_is_final else ChargeState.PROVISIONAL,
+        )
+    )
+
+    outcome = _GenerateOutcome(
+        claim=claim,
+        result=result,
+        clip_bytes=clip_bytes,
+        checksum=checksum,
+        attempt_no=attempt_no,
+        degraded=degraded,
+        degraded_reason=degraded_reason,
+    )
+    return await _settle_shot_and_checkpoint(state, deps, shot=shot, outcome=outcome)
 
 
 async def route_after_generate(state: JobState, deps: GraphDeps) -> str:
@@ -202,9 +521,76 @@ async def route_after_generate(state: JobState, deps: GraphDeps) -> str:
 
 async def extract_final_frame_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
     """T2.3: last decodable frame, lossless PNG, uniform-frame rejection (`assembly.md`)."""
-    del state, deps
-    message = "extract_final_frame_node is a T2.3 stub; frame extraction is not wired in yet"
-    raise NotImplementedError(message)
+    shot = state.shots[state.shot_index]
+    if shot.clip_artifact_id is None:
+        message = (
+            f"extract_final_frame reached for job {state.job_id} shot {state.shot_index} "
+            "with no clip_artifact_id; route_after_generate should have caught it"
+        )
+        raise GraphInvariantError(message)
+
+    ctx = NodeContext.for_node(
+        job_id=state.job_id,
+        node="extract_final_frame",
+        trace_id=state.trace_id,
+        budget_remaining=state.budget.view(deps.now()),
+        bible=state.bible,
+    )
+    ctx.require_tool("ffmpeg.extract_frame")
+
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        clip_record = await ArtifactRepository(session).get(shot.clip_artifact_id)
+    if clip_record is None:
+        message = (
+            f"artifact {shot.clip_artifact_id} named by shot {state.shot_index}'s "
+            f"clip_artifact_id was not found for job {state.job_id}"
+        )
+        raise GraphInvariantError(message)
+    clip_bytes = await deps.artifacts.read(_artifact_ref(clip_record))
+
+    with tempfile.TemporaryDirectory(prefix=f"frame-{state.job_id}-") as scratch:
+        clip_path = Path(scratch) / "clip.mp4"
+        await asyncio.to_thread(clip_path.write_bytes, clip_bytes)
+        frame_path = Path(scratch) / "frame.png"
+        # `assembly.md` §6: ffmpeg invocations are awaited via an executor, never inline in the
+        # event loop — `find_last_usable_frame` shells out synchronously underneath.
+        found = await asyncio.to_thread(find_last_usable_frame, clip_path, frame_path)
+        if not found:
+            # `assembly.md` §8: total extraction failure and uniform-frame rejection are the
+            # same outcome here — no anchor, flag degraded, never block the pipeline on a
+            # chaining aid. `final_frame_artifact_id` is left unset.
+            return {
+                "degraded": True,
+                "degraded_reason": (
+                    f"shot {state.shot_index}: no non-uniform frame found within "
+                    f"{STEP_BACK_ATTEMPTS}s of end-of-stream; no continuity anchor extracted "
+                    "`[D-45]`"
+                ),
+            }
+        png_bytes = await asyncio.to_thread(frame_path.read_bytes)
+
+    ctx.require_tool("artifact.write")
+    frame_ref = await deps.artifacts.write(
+        content_type=_CONTINUITY_FRAME_CONTENT_TYPE, data=png_bytes
+    )
+    checksum = sha256_of(png_bytes)
+
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        artifact_record = await ArtifactRepository(session).record(
+            NewArtifact(
+                job_id=state.job_id,
+                kind=ArtifactKind.CONTINUITY_FRAME,
+                storage_key=frame_ref.storage_key,
+                content_type=_CONTINUITY_FRAME_CONTENT_TYPE,
+                size_bytes=len(png_bytes),
+                checksum_sha256=checksum,
+                shot_index=state.shot_index,
+            )
+        )
+
+    updated_shot = shot.model_copy(update={"final_frame_artifact_id": artifact_record.id})
+    shots = tuple(updated_shot if s.index == state.shot_index else s for s in state.shots)
+    return {"shots": shots}
 
 
 async def route_after_frame(state: JobState, deps: GraphDeps) -> str:

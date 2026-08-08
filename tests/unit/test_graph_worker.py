@@ -8,7 +8,9 @@ only acked on success.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -16,8 +18,11 @@ from uuid import uuid4
 import pytest
 
 from tests.unit.test_persistence_redis_support import FakeRedis
+from video_agent.graph.guard import JobHarness
 from video_agent.graph.lock import JobLock
-from video_agent.graph.worker import JobWorker
+from video_agent.graph.worker import CANCEL_POLL_INTERVAL_S, JobWorker, WorkerResources
+from video_agent.harness.cancel import CancelActor, CancelRequest
+from video_agent.persistence.keys import cancel_signal_key
 from video_agent.persistence.queue import Delivery, JobMessage, JobQueue
 from video_agent.persistence.redis_client import RedisStore
 
@@ -41,13 +46,20 @@ def a_delivery(*, entry_id: str = "1-0") -> Delivery:
     )
 
 
-def a_worker(queue: RecordingQueue, lock: JobLock) -> JobWorker:
+def a_worker(
+    queue: RecordingQueue, lock: JobLock, *, cancel_store: RedisStore | None = None
+) -> JobWorker:
     return JobWorker(
         consumer="worker-1",
         queue=cast(JobQueue, queue),
         lock=lock,
-        engine=cast(Any, None),
-        gateway=cast(Any, None),
+        resources=WorkerResources(
+            engine=cast(Any, None),
+            gateway=cast(Any, None),
+            providers=cast(Any, None),
+            artifacts=cast(Any, None),
+        ),
+        cancel_store=cancel_store if cancel_store is not None else RedisStore(FakeRedis()),
     )
 
 
@@ -103,3 +115,20 @@ async def test_handle_one_releases_the_lock_but_does_not_ack_when_run_job_raises
     assert queue.acked == []  # a failed run is not acked; it stays pending for reclaim
     reacquired = await lock.acquire(delivery.message.job_id)
     assert reacquired is not None
+
+
+@pytest.mark.asyncio
+async def test_poll_cancel_sets_harness_cancel_once_the_signal_appears() -> None:
+    """`api.jobs.cancel_job`'s write side, read here: `_poll_cancel` finds the signal and sets
+    it on the same `JobHarness` every router's `guard()` reads, with no other plumbing."""
+    store = RedisStore(FakeRedis())
+    worker = a_worker(RecordingQueue(), JobLock(RedisStore(FakeRedis())), cancel_store=store)
+    job_id = uuid4()
+    harness = JobHarness(job_id=job_id, shots_required=4)
+    signal = CancelRequest(actor=CancelActor.CLIENT, requested_at=datetime.now(UTC))
+    await store.set(cancel_signal_key(job_id), signal.model_dump_json())
+
+    await asyncio.wait_for(worker._poll_cancel(harness, job_id), timeout=CANCEL_POLL_INTERVAL_S)
+
+    assert harness.cancel is not None
+    assert harness.cancel.actor is CancelActor.CLIENT
