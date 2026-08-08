@@ -7,6 +7,7 @@ does what §7 says it does.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, cast
@@ -171,6 +172,7 @@ async def test_shot_zero_submits_text_to_video_and_never_uploads_a_frame() -> No
     assert result.height == EXPECTED_HEIGHT
     submit_request = next(r for r in transport.seen if r.url.path == "/v1/text-to-video")
     assert "image-to-video" not in str(submit_request.url)
+    assert json.loads(submit_request.content)["aspect_ratio"] == "16:9"
 
 
 @pytest.mark.asyncio
@@ -205,6 +207,7 @@ async def test_a_later_shot_uploads_the_conditioning_frame_then_submits_image_to
     assert upload_request.content == b"\x89PNG raw bytes"
     submit_request = next(r for r in transport.seen if r.url.path == "/v1/image-to-video")
     assert b"files/frame-1.png" in submit_request.content
+    assert json.loads(submit_request.content)["aspect_ratio"] == "16:9"
 
 
 @pytest.mark.asyncio

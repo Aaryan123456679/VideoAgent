@@ -186,13 +186,21 @@ class MagicHourClient:
         return {"Authorization": f"Bearer {self._key_provider()}"}
 
     async def submit_text_to_video(
-        self, *, prompt: str, duration_s: float, resolution: str, model: str, name: str
+        self,
+        *,
+        prompt: str,
+        duration_s: float,
+        resolution: str,
+        aspect_ratio: str,
+        model: str,
+        name: str,
     ) -> SubmitResult:
         """Shot 0 only, always — including on repair. Shot 0 has no anchor to condition on."""
         body = {
             "model": model,
             "end_seconds": duration_s,
             "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
             "style": {"prompt": prompt},
             "name": name,
         }
@@ -205,6 +213,7 @@ class MagicHourClient:
         prompt: str,
         duration_s: float,
         resolution: str,
+        aspect_ratio: str,
         model: str,
         name: str,
         image_file_path: str,
@@ -218,6 +227,7 @@ class MagicHourClient:
             "model": model,
             "end_seconds": duration_s,
             "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
             "style": {"prompt": prompt},
             "name": name,
             "assets": {"image_file_path": image_file_path},
@@ -377,6 +387,7 @@ class MagicHourProvider:
                 prompt=req.prompt,
                 duration_s=req.duration_s,
                 resolution=req.resolution,
+                aspect_ratio=req.aspect_ratio,
                 model=model,
                 name=name,
             )
@@ -386,6 +397,7 @@ class MagicHourProvider:
                 prompt=req.prompt,
                 duration_s=req.duration_s,
                 resolution=req.resolution,
+                aspect_ratio=req.aspect_ratio,
                 model=model,
                 name=name,
                 image_file_path=image_file_path,
