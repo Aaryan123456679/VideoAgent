@@ -34,7 +34,7 @@ from video_agent.graph.state import SHOT_COUNT, JobState
 from video_agent.harness.budget import BudgetCaps, BudgetLedger
 from video_agent.harness.cancel import CancelRequest
 from video_agent.observability.errors import VideoAgentError
-from video_agent.persistence.keys import cancel_signal_key
+from video_agent.persistence.keys import cancel_signal_key, shot_repair_signal_key
 from video_agent.persistence.queue import Delivery, JobQueue
 from video_agent.persistence.repositories import JobRepository
 from video_agent.persistence.session import tenant_session
@@ -60,6 +60,12 @@ already lapsed, not one running a slow superstep."""
 CANCEL_POLL_INTERVAL_S: float = 3.0
 """How often this worker checks `persistence.keys.cancel_signal_key` for the job it is running.
 `api.jobs.cancel_job` is the writer; this is the reader side of that contract."""
+
+REPAIR_POLL_INTERVAL_S: float = 1.0
+"""How often this worker checks for a manually-injected repair signal, one shot index at a
+time. Tighter than `CANCEL_POLL_INTERVAL_S` because a shot generates in well under three
+seconds against the mock provider, and a demo needs the flag observed before that shot's
+`qc_shot` step runs, not after."""
 
 
 class JobNotFoundError(VideoAgentError):
@@ -171,12 +177,16 @@ class JobWorker:
         )
         compiled = build_graph(deps)
         cancel_task = asyncio.create_task(self._poll_cancel(harness, job_id))
+        repair_task = asyncio.create_task(self._poll_repair_signals(harness, job_id))
         try:
             await compiled.ainvoke(state, config={"configurable": {"thread_id": str(job_id)}})
         finally:
             cancel_task.cancel()
+            repair_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cancel_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await repair_task
 
     async def _poll_cancel(self, harness: JobHarness, job_id: UUID) -> None:
         """Read `persistence.keys.cancel_signal_key` until `api.jobs.cancel_job` writes one.
@@ -191,6 +201,24 @@ class JobWorker:
                 harness.cancel = CancelRequest.model_validate_json(raw)
                 return
             await asyncio.sleep(CANCEL_POLL_INTERVAL_S)
+
+    async def _poll_repair_signals(self, harness: JobHarness, job_id: UUID) -> None:
+        """Read `persistence.keys.shot_repair_signal_key` for every shot index, forever.
+
+        Not QC — this relays a manually-injected signal (`POST .../shots/{i}/force-repair`)
+        into `harness.force_repair_shots`, the same cross-process handoff `_poll_cancel` uses
+        for the same reason: the API process has no in-memory reference to this `harness`.
+        Consumed here (deleted from Redis) the moment it is observed, exactly once — a stray
+        repeat read must never re-flag a shot `qc_shot_node` already acted on.
+        """
+        while True:
+            for shot_index in range(SHOT_COUNT):
+                key = shot_repair_signal_key(job_id, shot_index)
+                raw = await self._cancel_store.get(key)
+                if raw is not None:
+                    harness.force_repair_shots.add(shot_index)
+                    await self._cancel_store.delete(key)
+            await asyncio.sleep(REPAIR_POLL_INTERVAL_S)
 
 
 def _fresh_state(job: JobRecord) -> JobState:

@@ -10,6 +10,13 @@ queue message, and the graph itself is run later by `graph.worker`, in a differe
 `CheckpointRepository.latest`, not the richer Redis `progress:{job_id}` event channel `api.md`
 §5 describes — a working simple version now, not an elaborate one half-built.
 
+**`force_repair_shot` is not `regenerate`.** `POST .../shots/{i}/force-repair`, below, is a
+different and much narrower thing than the deferred `regenerate` route above: it only works
+on a job that is still actively running and has not yet reached that shot's `qc_shot` step,
+and it injects a manual signal standing in for a QC verdict real scoring (`qc.md`, E3) would
+eventually send — it never evaluates anything itself. See `graph.nodes.qc_shot_node`'s
+docstring for what it stands in for.
+
 **The cross-process cancel contract.** `POST /v1/jobs/{id}/cancel` cannot reach the
 `JobHarness` that is actually running the job — that object lives inside a worker process this
 route never talks to. The handoff is the Redis key `persistence.keys.cancel_signal_key`, and
@@ -27,7 +34,7 @@ from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Path, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,7 +54,7 @@ from video_agent.harness.cancel import CancelActor, CancelRequest
 from video_agent.observability.codes import ErrorCode
 from video_agent.observability.context import current_trace_id, new_trace_id
 from video_agent.persistence.enums import JobOutcome, JobStatus
-from video_agent.persistence.keys import cancel_signal_key
+from video_agent.persistence.keys import cancel_signal_key, shot_repair_signal_key
 from video_agent.persistence.queue import JobMessage, JobQueue
 from video_agent.persistence.repositories import CheckpointRepository, JobRepository, NewJob
 from video_agent.persistence.session import TenantSession
@@ -69,9 +76,16 @@ ENTRY_NODE = "plan_story"
 constant, not imported from `graph.build`: the API depends on nothing that would pull in
 langgraph or a node body just to report "no checkpoint yet, so still on the first node"."""
 
+SHOT_COUNT = 4
+"""Mirrors `graph.state.SHOT_COUNT` — kept as a local constant, not an import, for the same
+reason `ENTRY_NODE` is: this module must not pull in `graph` (and therefore langgraph) just to
+validate a path parameter's bounds."""
+
 CREATE_STATUS = 202
 CANCEL_ACCEPTED_STATUS = 202
 CANCEL_NOOP_STATUS = 200
+FORCE_REPAIR_STATUS = 202
+FORCE_REPAIR_NOOP_STATUS = 200
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 STREAM_POLL_INTERVAL_S = 1.5
@@ -177,6 +191,18 @@ class CancelResponseView(BaseModel):
     outcome: Literal["SUCCESS", "PARTIAL", "FAILED_NO_PROGRESS", "FAILED", "ESCALATED"] | None = (
         None
     )
+
+
+class ForceRepairResponse(BaseModel):
+    """Confirms whether the manual repair signal was actually written — never a QC verdict.
+    `applied=False` with an already-terminal job is the no-op case, not an error: every shot's
+    `qc_shot` step has already run, so there is nothing left for the flag to reach."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    job_id: UUID
+    shot_index: int
+    applied: bool
 
 
 # --- reaching the cache from a route ------------------------------------------------------
@@ -474,6 +500,74 @@ async def cancel_job(
     )
     return Response(
         content=response_body, status_code=CANCEL_ACCEPTED_STATUS, media_type=_JSON_MEDIA_TYPE
+    )
+
+
+# --- POST /v1/jobs/{job_id}/shots/{shot_index}/force-repair ---------------------------------
+
+
+@router.post(
+    "/v1/jobs/{job_id}/shots/{shot_index}/force-repair", response_model=ForceRepairResponse
+)
+async def force_repair_shot(
+    request: Request,
+    job_id: UUID,
+    shot_index: Annotated[int, Path(ge=0, le=SHOT_COUNT - 1)],
+    principal: Annotated[Principal, Depends(require_tenant)],
+    session: Annotated[TenantSession, Depends(tenant_session)],
+    idempotency_key: Annotated[str, Depends(require_idempotency_key)],
+) -> Response:
+    """Manually inject the repair signal QC's own scoring (`qc.md`, E3) would eventually send.
+
+    **Not QC.** This never evaluates the shot against the continuity bible — it flags one shot
+    index for the graph's already-wired repair back-edge to act on, the next time that shot's
+    `qc_shot` step runs (`graph.nodes.qc_shot_node`). A no-op, not an error, once the job is
+    already terminal, mirroring `cancel_job`'s own no-op-on-terminal convention.
+    """
+    raw_body = await request.body()
+    cache = _cache_resource(request)
+    store = cache.idempotency_store()
+    outcome = await begin_idempotent(
+        store,
+        tenant_id=principal.tenant_id,
+        route=request.url.path,
+        key=idempotency_key,
+        body=raw_body,
+    )
+    if isinstance(outcome, Replay):
+        return _replay_response(outcome)
+    first = outcome
+
+    job = await JobRepository(session).get(job_id)
+    if job is None:
+        raise ApiError(ErrorCode.VA_REQ_005, job_id=job_id)
+    assert_tenant_owns(principal, job.tenant_id, job_id=job_id)
+
+    if job.status is JobStatus.TERMINAL:
+        result = ForceRepairResponse(job_id=job_id, shot_index=shot_index, applied=False)
+        response_body = result.model_dump_json()
+        await finish_idempotent(
+            store,
+            first,
+            status_code=FORCE_REPAIR_NOOP_STATUS,
+            body=response_body,
+            job_id=job.id,
+        )
+        return Response(
+            content=response_body,
+            status_code=FORCE_REPAIR_NOOP_STATUS,
+            media_type=_JSON_MEDIA_TYPE,
+        )
+
+    await cache.store.set(shot_repair_signal_key(job_id, shot_index), "1")
+
+    result = ForceRepairResponse(job_id=job_id, shot_index=shot_index, applied=True)
+    response_body = result.model_dump_json()
+    await finish_idempotent(
+        store, first, status_code=FORCE_REPAIR_STATUS, body=response_body, job_id=job.id
+    )
+    return Response(
+        content=response_body, status_code=FORCE_REPAIR_STATUS, media_type=_JSON_MEDIA_TYPE
     )
 
 

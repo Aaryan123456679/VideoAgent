@@ -53,6 +53,7 @@ class KeyName(StrEnum):
     LLM_CACHE = "llm_cache"
     CANCEL_SIGNAL = "cancel_signal"
     PROVIDER_WEBHOOK = "provider_webhook"
+    SHOT_REPAIR_SIGNAL = "shot_repair_signal"
 
 
 class RedisType(StrEnum):
@@ -144,6 +145,11 @@ arrives before the polling loop even starts checking is still there when it does
 because a hit is read once, immediately, by the same attempt that is already waiting on it —
 nothing reads a webhook flag from a different superstep."""
 
+SHOT_REPAIR_SIGNAL_TTL_SECONDS: Final = SECONDS_PER_HOUR
+"""1h: comfortably longer than any single job takes to run, short enough that a flag for a
+job that finished (or never reached that shot) does not linger. See `shot_repair_signal_key`
+for what this stands in for and why it exists at all."""
+
 KEY_REGISTRY: Final[dict[KeyName, KeySpec]] = {
     KeyName.IDEMPOTENCY: KeySpec(
         pattern="idem:{tenant}:{route}:{key}",
@@ -214,6 +220,13 @@ KEY_REGISTRY: Final[dict[KeyName, KeySpec]] = {
         ttl_policy=TtlPolicy.FIXED,
         ttl_seconds=PROVIDER_WEBHOOK_TTL_SECONDS,
         purpose="Inbound provider webhook re-read result, an accelerant over polling",
+    ),
+    KeyName.SHOT_REPAIR_SIGNAL: KeySpec(
+        pattern="job:{job_id}:shot:{shot_index}:force_repair",
+        redis_type=RedisType.STRING,
+        ttl_policy=TtlPolicy.FIXED,
+        ttl_seconds=SHOT_REPAIR_SIGNAL_TTL_SECONDS,
+        purpose="Manually-injected repair signal standing in for QC scoring (E3, not wired)",
     ),
 }
 """`persistence.md` §5, transcribed once. `test_all_documented_keys_have_constructors` diffs
@@ -417,6 +430,29 @@ def provider_webhook_key(provider_key: str, external_id: str) -> RedisKey:
     return _render(KeyName.PROVIDER_WEBHOOK, provider_key=provider_key, external_id=external_id)
 
 
+def shot_repair_signal_key(job_id: UUID, shot_index: int) -> RedisKey:
+    """`job:{job_id}:shot:{shot_index}:force_repair` — a manually-injected repair signal.
+
+    **Not QC.** Real per-shot scoring against the continuity bible is designed but deferred
+    (`qc.md`, E3) — `qc_shot_node` accepts every shot unconditionally today. This key exists
+    only so the *mechanism* a real QC verdict would eventually trigger — routing back to
+    `generate_shot` for one shot, respecting the repair cap, chaining continuity intact — can
+    be exercised and demonstrated without pretending the scoring itself exists.
+
+    - **Written by** `POST /v1/jobs/{job_id}/shots/{shot_index}/force-repair`, a human (or a
+      script standing in for one) asking the graph to treat this shot as if it had failed QC.
+    - **Read and consumed by** the worker's repair-signal poller, the same cross-process
+      pattern `cancel_signal_key` documents: the API process has no in-memory reference to the
+      `JobHarness` inside whatever worker process is actually running the job.
+    - **TTL** `SHOT_REPAIR_SIGNAL_TTL_SECONDS` (1h): the signal only ever matters while the
+      job is still running and has not yet reached this shot's QC step; anything longer is
+      just an unread flag outliving its job.
+    """
+    return _render(
+        KeyName.SHOT_REPAIR_SIGNAL, job_id=str(job_id), shot_index=str(shot_index)
+    )
+
+
 KEY_CONSTRUCTORS: Final[dict[KeyName, str]] = {
     KeyName.IDEMPOTENCY: idempotency_key.__name__,
     KeyName.JOB_LOCK: job_lock_key.__name__,
@@ -428,6 +464,7 @@ KEY_CONSTRUCTORS: Final[dict[KeyName, str]] = {
     KeyName.LLM_CACHE: llm_cache_key.__name__,
     KeyName.CANCEL_SIGNAL: cancel_signal_key.__name__,
     KeyName.PROVIDER_WEBHOOK: provider_webhook_key.__name__,
+    KeyName.SHOT_REPAIR_SIGNAL: shot_repair_signal_key.__name__,
 }
 """Registry entry to the function that renders it. The test resolves each name against this
 module, so an entry naming a function that does not exist is a failure rather than a comment."""

@@ -38,6 +38,11 @@ class JobHarness:
     error: FatalError | None = None
     no_progress: NoProgress | None = None
     preserved: tuple[str, ...] = field(default_factory=tuple)
+    force_repair_shots: set[int] = field(default_factory=set)
+    """Shot indices manually flagged for repair via `persistence.keys.shot_repair_signal_key`,
+    standing in for a QC verdict `qc.md`'s real scoring (E3, not wired) would eventually send.
+    `qc_shot_node` consumes an entry the moment it acts on it; `decide()` never reads this —
+    it is graph-local, not a harness termination fact."""
 
     async def decide(self, state: JobState, node: str, *, now: datetime) -> Decision:
         """Build this superstep's `LoopState` from live facts plus `state`, and apply the rules.

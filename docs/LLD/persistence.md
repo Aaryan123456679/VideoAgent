@@ -322,6 +322,7 @@ Cache, locks, rate limits, idempotency, progress. `[CPS §Canonical stack]`
 | `cache:llm:{hash}` | string | 1h | Gateway response cache (never for planning/bible) |
 | `job:{job_id}:cancel` | string | 24h | Cooperative cancel signal for the harness loop `[D-12]` |
 | `webhook:{provider_key}:{external_id}` | string | 30m | Inbound provider webhook re-read result, an accelerant over polling |
+| `job:{job_id}:shot:{shot_index}:force_repair` | string | 1h | Manually-injected repair signal standing in for QC scoring (E3, not wired) |
 
 ### 5.1 The job queue `[D-67]`
 

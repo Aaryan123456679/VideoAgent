@@ -525,6 +525,101 @@ async def test_double_cancel_with_the_same_key_replays() -> None:
     assert len(cache.store.writes) == 1, "the signal is written once, not once per replay"
 
 
+# --- POST /v1/jobs/{job_id}/shots/{shot_index}/force-repair --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_repair_a_running_job_writes_the_signal_and_returns_202() -> None:
+    database = ScriptedDatabase(ScriptedConnection([[_job_row(status="running")]]))
+    cache = FakeCache()
+    app = _app(database, cache)
+
+    async with api_client(app) as client:
+        response = await client.post(
+            f"/v1/jobs/{JOB_ID}/shots/1/force-repair",
+            headers={**authorised(), "Idempotency-Key": "f" * 20},
+        )
+
+    assert response.status_code == ACCEPTED
+    assert response.json() == {"job_id": str(JOB_ID), "shot_index": 1, "applied": True}
+    assert len(cache.store.writes) == 1
+    written_key, written_value = cache.store.writes[0]
+    assert written_key.value == f"job:{JOB_ID}:shot:1:force_repair"
+    assert written_value == "1"
+
+
+@pytest.mark.asyncio
+async def test_force_repair_a_terminal_job_is_a_noop_and_writes_no_signal() -> None:
+    database = ScriptedDatabase(ScriptedConnection([[_job_row(status="terminal")]]))
+    cache = FakeCache()
+    app = _app(database, cache)
+
+    async with api_client(app) as client:
+        response = await client.post(
+            f"/v1/jobs/{JOB_ID}/shots/0/force-repair",
+            headers={**authorised(), "Idempotency-Key": "g" * 20},
+        )
+
+    assert response.status_code == NOOP
+    assert response.json() == {"job_id": str(JOB_ID), "shot_index": 0, "applied": False}
+    assert cache.store.writes == []
+
+
+@pytest.mark.asyncio
+async def test_force_repair_requires_an_idempotency_key() -> None:
+    app = _app(ScriptedDatabase(), FakeCache())
+
+    async with api_client(app) as client:
+        response = await client.post(
+            f"/v1/jobs/{JOB_ID}/shots/0/force-repair", headers=authorised()
+        )
+
+    assert response.status_code == BAD_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_force_repair_a_missing_job_is_404() -> None:
+    database = ScriptedDatabase(ScriptedConnection([[]]))
+    app = _app(database, FakeCache())
+
+    async with api_client(app) as client:
+        response = await client.post(
+            f"/v1/jobs/{uuid4()}/shots/0/force-repair",
+            headers={**authorised(), "Idempotency-Key": "h" * 20},
+        )
+
+    assert response.status_code == NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_force_repair_rejects_a_shot_index_outside_the_job() -> None:
+    app = _app(ScriptedDatabase(), FakeCache())
+
+    async with api_client(app) as client:
+        response = await client.post(
+            f"/v1/jobs/{JOB_ID}/shots/4/force-repair",
+            headers={**authorised(), "Idempotency-Key": "i" * 20},
+        )
+
+    assert response.status_code == UNPROCESSABLE
+
+
+@pytest.mark.asyncio
+async def test_double_force_repair_with_the_same_key_replays() -> None:
+    database = ScriptedDatabase(ScriptedConnection([[_job_row(status="running")]]))
+    cache = FakeCache()
+    app = _app(database, cache)
+    headers = {**authorised(), "Idempotency-Key": "j" * 20}
+
+    async with api_client(app) as client:
+        first = await client.post(f"/v1/jobs/{JOB_ID}/shots/2/force-repair", headers=headers)
+        second = await client.post(f"/v1/jobs/{JOB_ID}/shots/2/force-repair", headers=headers)
+
+    assert first.status_code == second.status_code == ACCEPTED
+    assert first.text == second.text
+    assert len(cache.store.writes) == 1, "the signal is written once, not once per replay"
+
+
 # --- GET /v1/jobs/{job_id}/stream ----------------------------------------------------------
 
 

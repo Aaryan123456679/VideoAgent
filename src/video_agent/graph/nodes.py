@@ -30,7 +30,7 @@ from video_agent.gateway.models import ArtifactRef
 from video_agent.graph.deps import GraphDeps
 from video_agent.graph.frame_extraction import STEP_BACK_ATTEMPTS, find_last_usable_frame
 from video_agent.graph.guard import guard
-from video_agent.graph.state import GraphInvariantError, JobState, ShotState
+from video_agent.graph.state import MAX_REPAIRS, GraphInvariantError, JobState, ShotState
 from video_agent.harness.budget import Charge, ChargeState
 from video_agent.harness.context import NodeContext
 from video_agent.persistence.enums import ArtifactKind, ShotStatus
@@ -692,19 +692,33 @@ async def route_after_frame(state: JobState, deps: GraphDeps) -> str:
 
 
 # ---------------------------------------------------------------------------
-# qc_shot — unconditional-accept stub, v1
+# qc_shot — unconditional-accept stub, v1, with a manual repair override
 # ---------------------------------------------------------------------------
 
 
 async def qc_shot_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
-    """# QC-STUB [S3.2.2 removes this]: v1 accepts every shot unconditionally.
+    """# QC-STUB [S3.2.2 removes this]: v1 accepts every shot unconditionally, unless a human
+    (or a script standing in for one) has manually flagged it for repair.
 
-    Real scoring and the repair back-edge are deferred to E3 (`qc.md`, `S3.2.2`); this node
-    only performs the bookkeeping a scored decision would trigger on an unconditional accept —
-    marking the shot accepted and advancing the chaining frame. Never scores, never repairs.
+    Real scoring is deferred to E3 (`qc.md`, `S3.2.2`) — nothing here evaluates the shot against
+    the continuity bible. `deps.harness.force_repair_shots` is not QC's verdict; it is a signal
+    injected via `POST /v1/jobs/{job_id}/shots/{shot_index}/force-repair`
+    (`persistence.keys.shot_repair_signal_key`) so the repair *mechanism* — the back-edge to
+    `generate_shot`, the repair cap, continuity held across the regenerated shot — can be
+    exercised and demonstrated without pretending the scoring itself exists.
     """
-    del deps
     shot = state.shots[state.shot_index]
+    if state.shot_index in deps.harness.force_repair_shots and shot.repairs_used < MAX_REPAIRS:
+        deps.harness.force_repair_shots.discard(state.shot_index)
+        repaired = shot.model_copy(
+            update={
+                "status": ShotStatus.PENDING,
+                "repairs_used": shot.repairs_used + 1,
+            }
+        )
+        shots = tuple(repaired if s.index == state.shot_index else s for s in state.shots)
+        return {"shots": shots}
+
     accepted = shot.model_copy(
         update={
             "status": ShotStatus.ACCEPTED,
@@ -727,7 +741,9 @@ async def route_after_qc(state: JobState, deps: GraphDeps) -> str:
     shot = state.shots[state.shot_index]
     if shot.status in (ShotStatus.ACCEPTED, ShotStatus.ABANDONED):
         return "select_next_shot"
-    return "generate_shot"  # the repair back-edge — unreachable while qc_shot always accepts
+    return "generate_shot"  # the repair back-edge — reachable only via a manual force-repair
+    # signal today; real QC scoring (the only thing that would set this status on its own)
+    # remains deferred, so this branch never fires from QC's own judgment
 
 
 # ---------------------------------------------------------------------------
