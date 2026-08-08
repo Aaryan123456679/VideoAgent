@@ -96,7 +96,12 @@ stateDiagram-v2
     generate_shot --> extract_final_frame
     extract_final_frame --> qc_shot
     qc_shot --> select_next_shot : accepted / abandoned
-    qc_shot --> generate_shot : repair, capped at 2 attempts\n(designed; E3 — currently\nan unconditional-accept stub)
+    qc_shot --> generate_shot : repair, capped at 2 attempts
+    note right of qc_shot
+        Repair edge is designed but not
+        wired live yet (E3) — currently an
+        unconditional-accept stub
+    end note
     assemble --> deliver
     deliver --> finalize
     finalize --> [*]
