@@ -147,15 +147,29 @@ class StoryPlanRecord:
     total_duration_s: Decimal
     model_alias: str
     prompt_version: str
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
 class ContinuityBibleRecord:
-    """The bible for a job. Immutable for the life of the job, enforced by a trigger."""
+    """The bible for a job. Immutable for the life of the job, enforced by a trigger.
+
+    Carries the six dimension blobs and `negative_constraints` — not just the id/hash — so a
+    redelivered `lock_bible` can rebuild the domain `ContinuityBible` it already wrote instead
+    of calling the model and re-inserting into a `job_id`-unique table a second time `[D-67]`.
+    """
 
     id: UUID
     job_id: UUID
+    character: dict[str, Any]
+    wardrobe: dict[str, Any]
+    location: dict[str, Any]
+    lighting: dict[str, Any]
+    palette: dict[str, Any]
+    lens_language: dict[str, Any]
+    negative_constraints: list[str]
     content_hash: str
+    locked_at: datetime
     model_alias: str
     prompt_version: str
 
@@ -479,6 +493,30 @@ class StoryPlanRepository(_Repository):
         )
         return None if row is None else row["id"]
 
+    async def list_beats(self, job_id: UUID) -> list[dict[str, Any]]:
+        """All four beats of one job's locked plan, in `idx` order.
+
+        Shaped exactly like `NewStoryPlan.beats`' entries (plus `idx`) so a caller can feed a
+        row straight into a `Beat` without a second translation step — this is what lets a
+        redelivered `plan_story` reconstruct the plan it already wrote instead of calling the
+        model and re-inserting into a `job_id`-unique table a second time `[D-67]`.
+        """
+        statement = (
+            select(
+                beat.c.idx,
+                beat.c.kind,
+                beat.c.action,
+                beat.c.camera_move,
+                beat.c.duration_s,
+                beat.c.continuity_note,
+            )
+            .select_from(beat.join(story_plan, beat.c.story_plan_id == story_plan.c.id))
+            .where(story_plan.c.job_id == job_id)
+            .order_by(beat.c.idx)
+        )
+        result = await self._session.execute(statement)
+        return [dict(row) for row in result.mappings()]
+
 
 class ContinuityBibleRepository(_Repository):
     """The bible. Written once; there is deliberately no update method."""
@@ -796,11 +834,20 @@ _PLAN_COLUMNS = (
     story_plan.c.total_duration_s,
     story_plan.c.model_alias,
     story_plan.c.prompt_version,
+    story_plan.c.created_at,
 )
 _BIBLE_COLUMNS = (
     continuity_bible.c.id,
     continuity_bible.c.job_id,
+    continuity_bible.c.character,
+    continuity_bible.c.wardrobe,
+    continuity_bible.c.location,
+    continuity_bible.c.lighting,
+    continuity_bible.c.palette,
+    continuity_bible.c.lens_language,
+    continuity_bible.c.negative_constraints,
     continuity_bible.c.content_hash,
+    continuity_bible.c.locked_at,
     continuity_bible.c.model_alias,
     continuity_bible.c.prompt_version,
 )
@@ -878,6 +925,7 @@ def _plan_record(row: RowMapping) -> StoryPlanRecord:
         total_duration_s=row["total_duration_s"],
         model_alias=row["model_alias"],
         prompt_version=row["prompt_version"],
+        created_at=row["created_at"],
     )
 
 
@@ -885,7 +933,15 @@ def _bible_record(row: RowMapping) -> ContinuityBibleRecord:
     return ContinuityBibleRecord(
         id=row["id"],
         job_id=row["job_id"],
+        character=row["character"],
+        wardrobe=row["wardrobe"],
+        location=row["location"],
+        lighting=row["lighting"],
+        palette=row["palette"],
+        lens_language=row["lens_language"],
+        negative_constraints=row["negative_constraints"],
         content_hash=row["content_hash"],
+        locked_at=row["locked_at"],
         model_alias=row["model_alias"],
         prompt_version=row["prompt_version"],
     )

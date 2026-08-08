@@ -44,6 +44,7 @@ from video_agent.persistence.repositories import (
     AttemptClaim,
     AttemptRequest,
     CheckpointRepository,
+    ContinuityBibleRecord,
     ContinuityBibleRepository,
     CostSettlement,
     JobRepository,
@@ -57,6 +58,19 @@ from video_agent.persistence.repositories import (
     StoryPlanRepository,
 )
 from video_agent.persistence.session import tenant_session
+from video_agent.planning.models import (
+    Beat,
+    CameraMove,
+    CharacterSpec,
+    ContinuityBible,
+    LensLanguageSpec,
+    LightingSpec,
+    LocationSpec,
+    PaletteSpec,
+    StoryPlan,
+    WardrobeSpec,
+)
+from video_agent.planning.models import BeatKind as PlanBeatKind
 from video_agent.planning.service import lock_bible as lock_bible_domain
 from video_agent.planning.service import plan_story as plan_story_domain
 from video_agent.providers.compose import ComposedPrompt, compose_prompt
@@ -96,35 +110,74 @@ kept as the named constant the real scorer (`S3.2.2`) will compare against."""
 # ---------------------------------------------------------------------------
 
 
-async def plan_story_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
-    """`planning.md` §3.1: one LLM pass, persisted, then seeded into four pending shots."""
-    ctx = NodeContext.for_node(
-        job_id=state.job_id,
-        node="plan_story",
-        trace_id=state.trace_id,
-        budget_remaining=state.budget.view(deps.now()),
-    )
-    plan = await plan_story_domain(state.prompt, ctx=ctx, gateway=deps.gateway)
-    async with tenant_session(deps.engine, state.tenant_id) as session:
-        await StoryPlanRepository(session).create(
-            NewStoryPlan(
-                job_id=plan.job_id,
-                logline=plan.logline,
-                total_duration_s=Decimal(str(plan.total_duration_s)),
-                model_alias=plan.model_alias,
-                prompt_version=plan.prompt_version,
-                beats=[
-                    {
-                        "kind": beat.kind.value,
-                        "action": beat.action,
-                        "camera_move": beat.camera_move.value,
-                        "duration_s": beat.duration_s,
-                        "continuity_note": beat.continuity_note,
-                    }
-                    for beat in plan.beats
-                ],
-            )
+def _beats_from_rows(rows: list[dict[str, Any]]) -> list[Beat]:
+    """`StoryPlanRepository.list_beats`' rows, reassembled into `planning.models.Beat`s."""
+    return [
+        Beat(
+            index=row["idx"],
+            kind=PlanBeatKind(row["kind"]),
+            action=row["action"],
+            camera_move=CameraMove(row["camera_move"]),
+            duration_s=float(row["duration_s"]),
+            continuity_note=row["continuity_note"],
         )
+        for row in rows
+    ]
+
+
+async def plan_story_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
+    """`planning.md` §3.1: one LLM pass, persisted, then seeded into four pending shots.
+
+    Checks for an already-locked plan first. `graph.md` §6.1: queue delivery is at-least-once,
+    so this node must be safe to run twice — a redelivered message that already reached this
+    point would otherwise call the model a second time for nothing and then crash on
+    `story_plan`'s `job_id`-unique constraint, which is worse than the redelivery itself. Rather
+    than calling the model or writing again, it just re-derives the same return value from what
+    is already on disk. This does not restore in-flight shot progress from an earlier partial
+    run beyond the four fresh `pending` placeholders below — full crash recovery from the latest
+    checkpoint is the resume machinery `graph.md`'s own status header defers to E3; this only
+    guarantees `plan_story` itself never double-spends or double-writes.
+    """
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        existing = await StoryPlanRepository(session).get_for_job(state.job_id)
+        if existing is not None:
+            beats = _beats_from_rows(await StoryPlanRepository(session).list_beats(state.job_id))
+            plan = StoryPlan(
+                job_id=state.job_id,
+                logline=existing.logline,
+                beats=beats,
+                total_duration_s=float(existing.total_duration_s),
+                model_alias=existing.model_alias,
+                prompt_version=existing.prompt_version,
+                created_at=existing.created_at,
+            )
+        else:
+            ctx = NodeContext.for_node(
+                job_id=state.job_id,
+                node="plan_story",
+                trace_id=state.trace_id,
+                budget_remaining=state.budget.view(deps.now()),
+            )
+            plan = await plan_story_domain(state.prompt, ctx=ctx, gateway=deps.gateway)
+            await StoryPlanRepository(session).create(
+                NewStoryPlan(
+                    job_id=plan.job_id,
+                    logline=plan.logline,
+                    total_duration_s=Decimal(str(plan.total_duration_s)),
+                    model_alias=plan.model_alias,
+                    prompt_version=plan.prompt_version,
+                    beats=[
+                        {
+                            "kind": beat.kind.value,
+                            "action": beat.action,
+                            "camera_move": beat.camera_move.value,
+                            "duration_s": beat.duration_s,
+                            "continuity_note": beat.continuity_note,
+                        }
+                        for beat in plan.beats
+                    ],
+                )
+            )
     shots = tuple(
         ShotState(index=beat.index, beat_kind=PersistenceBeatKind(beat.kind.value))
         for beat in plan.beats
@@ -142,36 +195,67 @@ async def route_after_plan(state: JobState, deps: GraphDeps) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _bible_from_record(record: ContinuityBibleRecord) -> ContinuityBible:
+    """`ContinuityBibleRepository.get_for_job`'s full record, reassembled into the domain type."""
+    return ContinuityBible(
+        job_id=record.job_id,
+        character=CharacterSpec(**record.character),
+        wardrobe=WardrobeSpec(**record.wardrobe),
+        location=LocationSpec(**record.location),
+        lighting=LightingSpec(**record.lighting),
+        palette=PaletteSpec(**record.palette),
+        lens_language=LensLanguageSpec(**record.lens_language),
+        negative_constraints=list(record.negative_constraints),
+        content_hash=record.content_hash,
+        locked_at=record.locked_at,
+        model_alias=record.model_alias,
+        prompt_version=record.prompt_version,
+    )
+
+
 async def lock_bible_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
-    """`planning.md` §3.2: one LLM pass against the accepted plan, persisted once, never updated."""
+    """`planning.md` §3.2: one LLM pass against the accepted plan, persisted once, never updated.
+
+    Checks for an already-locked bible first, for the same at-least-once-redelivery reason
+    `plan_story_node` does — `continuity_bible` is `job_id`-unique and has no update method by
+    design (`[PRD §How it works 2]`), so a naive redelivery would crash on the insert after
+    paying for a second model call. See `plan_story_node`'s docstring for the full reasoning and
+    the boundary of what this does and does not fix.
+    """
     if state.story_plan is None:
         message = "lock_bible reached without a story plan; route_after_plan should have caught it"
         raise GraphInvariantError(message)
-    ctx = NodeContext.for_node(
-        job_id=state.job_id,
-        node="lock_bible",
-        trace_id=state.trace_id,
-        budget_remaining=state.budget.view(deps.now()),
-    )
-    bible = await lock_bible_domain(state.story_plan, state.prompt, ctx=ctx, gateway=deps.gateway)
     async with tenant_session(deps.engine, state.tenant_id) as session:
-        await ContinuityBibleRepository(session).create(
-            NewContinuityBible(
+        existing = await ContinuityBibleRepository(session).get_for_job(state.job_id)
+        if existing is not None:
+            bible = _bible_from_record(existing)
+        else:
+            ctx = NodeContext.for_node(
                 job_id=state.job_id,
-                dimensions={
-                    "character": bible.character.model_dump(mode="json"),
-                    "wardrobe": bible.wardrobe.model_dump(mode="json"),
-                    "location": bible.location.model_dump(mode="json"),
-                    "lighting": bible.lighting.model_dump(mode="json"),
-                    "palette": bible.palette.model_dump(mode="json"),
-                    "lens_language": bible.lens_language.model_dump(mode="json"),
-                },
-                negative_constraints=list(bible.negative_constraints),
-                content_hash=bible.content_hash,
-                model_alias=bible.model_alias,
-                prompt_version=bible.prompt_version,
+                node="lock_bible",
+                trace_id=state.trace_id,
+                budget_remaining=state.budget.view(deps.now()),
             )
-        )
+            bible = await lock_bible_domain(
+                state.story_plan, state.prompt, ctx=ctx, gateway=deps.gateway
+            )
+            await ContinuityBibleRepository(session).create(
+                NewContinuityBible(
+                    job_id=state.job_id,
+                    dimensions={
+                        "character": bible.character.model_dump(mode="json"),
+                        "wardrobe": bible.wardrobe.model_dump(mode="json"),
+                        "location": bible.location.model_dump(mode="json"),
+                        "lighting": bible.lighting.model_dump(mode="json"),
+                        "palette": bible.palette.model_dump(mode="json"),
+                        "lens_language": bible.lens_language.model_dump(mode="json"),
+                    },
+                    negative_constraints=list(bible.negative_constraints),
+                    content_hash=bible.content_hash,
+                    model_alias=bible.model_alias,
+                    prompt_version=bible.prompt_version,
+                )
+            )
     return {"bible": bible, "bible_hash": bible.content_hash}
 
 
