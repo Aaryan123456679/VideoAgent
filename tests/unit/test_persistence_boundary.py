@@ -16,12 +16,13 @@ constructs nothing at runtime. Counting it would make the check fire on modules 
 obeying the rule, and a check with false positives is a check that gets an exemption added to
 it.
 
-**One live exemption, and it is asserted.** `PENDING_CONSOLIDATION` names two `T0.4` modules
-that build their own engine and their own tenant scope — a duplicate of
-`video_agent.persistence.session`, written concurrently. The list is checked in both
-directions: it may not grow, and an entry that has *stopped* violating must be removed. So the
-exemption expires by itself the moment the duplication is consolidated, rather than becoming a
-permanent hole that a third module can be added to.
+**There is no longer an exemption, and that is the point.** `T0.5` shipped this gate with a
+`PENDING_CONSOLIDATION` list naming `api/clients.py` and `api/database.py`, which built their
+own engine and their own tenant scope — a duplicate of `video_agent.persistence.session` down
+to a second copy of the `app.tenant_id` constant. The list was asserted in both directions, so
+an entry that stopped violating had to be deleted. `T0.6` consolidated both onto
+`persistence.session` and deleted the list, which is the exemption working as designed: it
+expired because the reason for it went away, not because someone stopped looking.
 """
 
 from __future__ import annotations
@@ -33,23 +34,6 @@ from pathlib import Path
 import pytest
 
 PERSISTENCE_PACKAGE = "src/video_agent/persistence"
-
-PENDING_CONSOLIDATION: dict[str, str] = {
-    "src/video_agent/api/clients.py": (
-        "T0.4 builds its own AsyncEngine instead of calling "
-        "video_agent.persistence.create_database_engine."
-    ),
-    "src/video_agent/api/database.py": (
-        "T0.4 reimplements the tenant-scoped transaction that "
-        "video_agent.persistence.session.tenant_session already provides, including its own "
-        "copy of the `app.tenant_id` constant and its own set_config call."
-    ),
-}
-"""Modules that violate the boundary today, each with the reason and the owning task.
-
-Not a permissive pattern and not a directory: two exact paths, so nothing else can inherit the
-exemption by living next to them.
-"""
 
 SESSION_CONSTRUCTORS: frozenset[str] = frozenset(
     {
@@ -133,44 +117,55 @@ def _module_violations(root: Path) -> dict[str, list[str]]:
 # --- The gate --------------------------------------------------------------------------------
 
 
-def test_no_unexempted_module_outside_persistence_opens_a_session(repo_root: Path) -> None:
-    """A new module that builds its own engine cannot merge."""
+def test_no_module_outside_persistence_opens_a_session(repo_root: Path) -> None:
+    """Nothing under `src/` outside the persistence package mints an engine or a session.
+
+    No exemption list any more. A module that needs a transaction calls
+    `video_agent.persistence.tenant_session`, which is the only place `SET LOCAL app.tenant_id`
+    is issued.
+    """
     offenders = _module_violations(repo_root)
-    unexpected = [
-        line
-        for path, lines in offenders.items()
-        if path not in PENDING_CONSOLIDATION
-        for line in lines
-    ]
-    assert unexpected == [], "\n".join(unexpected)
+
+    assert offenders == {}, "\n".join(line for lines in offenders.values() for line in lines)
 
 
-def test_the_exemption_list_is_exactly_the_two_known_modules() -> None:
-    """It may not grow silently. `[persistence.md §10]` applies the same rule to RLS."""
-    assert set(PENDING_CONSOLIDATION) == {
-        "src/video_agent/api/clients.py",
-        "src/video_agent/api/database.py",
-    }
+@pytest.mark.parametrize(
+    "path",
+    ["src/video_agent/api/clients.py", "src/video_agent/api/database.py"],
+)
+def test_the_two_consolidated_modules_are_clean(repo_root: Path, path: str) -> None:
+    """The `T0.4` duplication is gone, named module by module.
 
-
-@pytest.mark.parametrize("path", sorted(PENDING_CONSOLIDATION))
-def test_each_exempted_module_still_actually_violates(repo_root: Path, path: str) -> None:
-    """The exemption expires by itself.
-
-    If `T0.4` consolidates onto `video_agent.persistence`, this fails and the entry has to be
-    deleted — which is the opposite of the usual exemption, where the entry outlives the reason
-    for it and nobody notices.
+    Pinned by name rather than left to the sweep above, because the sweep would also pass if
+    both files were deleted or renamed — and "the violation is gone because the file is gone"
+    is not the same result as "the file now uses the shared session".
     """
     source = repo_root / path
-    assert source.is_file(), f"{path} is exempted but does not exist; delete the entry"
-    assert violations_in(ast.parse(source.read_text(encoding="utf-8")), path), (
-        f"{path} no longer opens its own session; remove it from PENDING_CONSOLIDATION"
-    )
+    assert source.is_file()
+
+    assert violations_in(ast.parse(source.read_text(encoding="utf-8")), path) == []
 
 
-@pytest.mark.parametrize("path", sorted(PENDING_CONSOLIDATION))
-def test_each_exemption_carries_a_reason(path: str) -> None:
-    assert PENDING_CONSOLIDATION[path].strip()
+def test_the_api_reuses_the_persistence_session_rather_than_reimplementing_it(
+    repo_root: Path,
+) -> None:
+    """Consolidated *onto* `persistence.session`, not merely stripped of its constructors.
+
+    A `Database.tenant_scope` that had simply stopped opening a transaction would satisfy the
+    scan above while quietly running every query unscoped. This asserts the positive: the
+    module imports the shared scope and the shared setting name.
+    """
+    source = (repo_root / "src/video_agent/api/database.py").read_text(encoding="utf-8")
+    imported = {
+        f"{node.module}.{alias.name}"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+
+    assert "video_agent.persistence.session.tenant_session" in imported
+    assert "video_agent.persistence.rls.TENANT_SETTING" in imported
+    assert "SET_LOCAL_TENANT_SQL" not in source
 
 
 # --- The scanner ------------------------------------------------------------------------------

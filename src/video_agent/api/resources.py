@@ -33,7 +33,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from contextlib import AbstractAsyncContextManager
     from uuid import UUID
 
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from video_agent.persistence.session import TenantSession
 
 _LOGGER: Final = get_logger(__name__)
 
@@ -57,8 +57,13 @@ class ProbedResource(ClosableResource, Protocol):
 class DatabaseResource(ProbedResource, Protocol):
     """The database, as the API is allowed to see it: tenant-scoped sessions and a probe."""
 
-    def tenant_scope(self, tenant_id: UUID) -> AbstractAsyncContextManager[AsyncSession]:
-        """A transaction bound to `tenant_id` for row-level security."""
+    def tenant_scope(self, tenant_id: UUID) -> AbstractAsyncContextManager[TenantSession]:
+        """A transaction bound to `tenant_id` for row-level security.
+
+        `TenantSession` rather than a raw `AsyncSession`: `persistence.session` owns the
+        binding and hands back a session that refuses to run once its transaction has ended,
+        which a bare `AsyncSession` cannot express.
+        """
         ...  # pragma: no cover - protocol declaration
 
 

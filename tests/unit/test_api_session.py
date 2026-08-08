@@ -5,9 +5,11 @@ tenant, and the tenant comes from the `Principal`.** If the binding runs second,
 is unscoped. If the value can come from a header or a body, row-level security is protecting
 nothing — the client chooses its own tenant.
 
-Both are asserted against the real `Database.tenant_scope`; only the session it opens is
-substituted. Deleting the `set_config` call, moving it after the first query, or reading the
-tenant from anywhere but the principal each fails at least one test here.
+Both are asserted against the real `Database.tenant_scope`, which since `T0.6` is one line over
+`video_agent.persistence.session.tenant_session`; only the engine is substituted. Deleting the
+`set_config` call, moving it after the first query, or reading the tenant from anywhere but the
+principal each fails at least one test here — and now fails it in `persistence`, where the
+statement actually lives, rather than in a second copy of it that `api` used to keep.
 """
 
 from __future__ import annotations
@@ -30,15 +32,14 @@ from tests.unit.test_api_support import (
     build_resources,
 )
 from video_agent.api import database as database_module
-from video_agent.api.database import (
-    PING_SQL,
-    SET_LOCAL_TENANT_SQL,
-    TENANT_SETTING,
-    Database,
-)
+from video_agent.api.database import PING_SQL, TENANT_SETTING, Database
 from video_agent.api.errors import HTTP_UNAUTHORIZED
+from video_agent.persistence.session import SET_TENANT_STATEMENT
 
 PROBE_QUERY: Final = "SELECT * FROM job"
+SET_LOCAL_TENANT_SQL: Final = str(SET_TENANT_STATEMENT)
+"""The statement `persistence.session` issues, as text. Read from the production constant so a
+change to it fails these assertions rather than leaving them checking a stale copy."""
 EXPECTED_SESSIONS: Final = 2
 
 

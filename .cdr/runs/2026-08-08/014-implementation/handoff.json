@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/014-implementation",
+  "subtask": "T0.7",
+  "status": "completed",
+  "committed": false,
+  "modules": ["gateway"],
+  "created": [
+    "src/video_agent/gateway/models.py",
+    "src/video_agent/gateway/errors.py",
+    "src/video_agent/gateway/classify.py",
+    "src/video_agent/gateway/clock.py",
+    "src/video_agent/gateway/retry.py",
+    "src/video_agent/gateway/breaker.py",
+    "src/video_agent/gateway/capabilities.py",
+    "src/video_agent/gateway/pricing.py",
+    "src/video_agent/gateway/rendering.py",
+    "src/video_agent/gateway/prompts.py",
+    "src/video_agent/gateway/cache.py",
+    "src/video_agent/gateway/transport.py",
+    "src/video_agent/gateway/gateway.py",
+    "tests/gateway_doubles.py",
+    "tests/unit/test_gateway_interface.py",
+    "tests/unit/test_gateway_retry.py",
+    "tests/unit/test_gateway_fallback.py",
+    "tests/unit/test_gateway_breaker.py",
+    "tests/unit/test_gateway_rendering.py",
+    "tests/unit/test_gateway_structured_output.py",
+    "tests/unit/test_gateway_pricing.py",
+    "tests/unit/test_gateway_prompts.py",
+    "tests/unit/test_gateway_cache.py",
+    "tests/unit/test_gateway_transport.py",
+    "tests/unit/test_gateway_logging.py",
+    "tests/integration/test_gateway_live_proxy.py"
+  ],
+  "modified": ["src/video_agent/gateway/__init__.py"],
+  "entry_points": {
+    "gateway": "src/video_agent/gateway/gateway.py::LiteLLMGateway",
+    "wiring": "src/video_agent/gateway/gateway.py::GatewayDeps",
+    "classification_table": "src/video_agent/gateway/classify.py::classify",
+    "retry_schedule": "src/video_agent/gateway/retry.py::RetryPolicy",
+    "circuit": "src/video_agent/gateway/breaker.py::CircuitBreaker",
+    "quarantine": "src/video_agent/gateway/rendering.py::render"
+  },
+  "unverified": [
+    "S0.7.4 Redis-backed cross-worker circuit sharing against a real Redis (no Redis running; RedisCircuitStateStore covered only by a failing-client double)",
+    "S0.7.8 RedisResponseCache against a real Redis and real TTL expiry (InMemoryResponseCache does not expire)",
+    "S0.7.1 acceptance 5 against a live LiteLLM proxy (proxy not running; asserted through httpx.MockTransport)",
+    "ProxyCapabilityRegistry against a live /model/info payload shape",
+    "S0.7.7 the four in-repo prompt bodies under prompts/ (D-72) are not authored — client only"
+  ],
+  "open_questions": [
+    "gateway.md S4.4 names the never-cached prompts plan_story/lock_bible; PLAN S0.7.8 names them story_plan/continuity_bible. Both spellings are excluded pending reconciliation.",
+    "No VA-GW- code exists for HTTP 402; PaymentRequiredError carries VA-PROV-009 per D-62 rather than minting a code (D-55).",
+    "config/aliases.yaml declares required_capabilities per group but nothing per model; capabilities are discovered from the proxy, so an unreachable proxy fails every capability-bearing alias closed."
+  ],
+  "not_touched": [
+    "src/video_agent/persistence/",
+    "src/video_agent/api/",
+    "src/video_agent/observability/",
+    "src/video_agent/config/",
+    "tests/static_guards.py",
+    "pyproject.toml",
+    ".env.example",
+    ".github/workflows/ci.yml",
+    "config/aliases.yaml"
+  ]
+}

@@ -36,11 +36,13 @@ from pydantic import BaseModel, ConfigDict
 
 from video_agent.api.errors import ApiError, ErrorContext
 from video_agent.observability.codes import ErrorCode
+from video_agent.persistence.keys import IDEMPOTENCY_TTL_SECONDS
+from video_agent.persistence.keys import idempotency_key as render_idempotency_key
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable
 
-    from redis.asyncio import Redis
+    from video_agent.persistence.redis_client import RedisCommands
 
 IDEMPOTENCY_HEADER: Final = "Idempotency-Key"
 REPLAYED_HEADER: Final = "Idempotency-Replayed"
@@ -51,9 +53,11 @@ MAX_KEY_LENGTH: Final = 255
 """`api.md` §2.3 declares these bounds on the header. A key shorter than 16 characters is not
 unique enough to be one, and the upper bound stops a client using the body as its key."""
 
-IDEMPOTENCY_TTL_SECONDS: Final = 86_400
-"""24 hours `[D-16]`. Long enough to cover any retry a client will make, short enough that the
-key space does not grow without bound."""
+# `IDEMPOTENCY_TTL_SECONDS` is imported from `persistence.keys` rather than declared here.
+# `T0.4` wrote `86_400` in this module while `persistence.md` §5 documented the same window in
+# its key table. Two numbers that must agree and are never compared are two numbers that will
+# disagree, and the direction that hurts is silent: a shorter TTL here than the Postgres unique
+# constraint assumes turns a legitimate 24-hour retry into a second, differently-shaped job.
 
 IN_FLIGHT_RETRY_AFTER_SECONDS: Final = 2
 """What `VA-REQ-004` puts in `Retry-After`. Short: the first call is still running, not queued
@@ -114,8 +118,15 @@ class IdempotencyStore(Protocol):
 
 
 def storage_key_for(tenant_id: UUID, route: str, key: str) -> str:
-    """`api.md` §3: `idem:{tenant}:{route}:{key}`. Tenant-first so a scan is tenant-scoped."""
-    return f"idem:{tenant_id}:{route}:{key}"
+    """`api.md` §3: `idem:{tenant}:{route}:{key}`. Tenant-first so a scan is tenant-scoped.
+
+    The pattern itself lives in `persistence.keys.KEY_REGISTRY` and is rendered by
+    `idempotency_key`. `T0.4` spelled it out here as an f-string, which made two definitions of
+    one key: the API's and `persistence.md` §5's. A key written under one spelling and swept,
+    expired or inspected under the other silently does nothing, and the TTL is enforced by the
+    registry entry — so the two had to agree, and now they cannot disagree.
+    """
+    return render_idempotency_key(tenant_id, route, key).value
 
 
 def canonical_json(body: bytes) -> str:
@@ -228,7 +239,7 @@ async def finish_idempotent(
 class RedisIdempotencyStore:
     """The production store. `SET ... NX EX` is the claim; nothing else is atomic enough."""
 
-    def __init__(self, client: Redis, ttl_seconds: int = IDEMPOTENCY_TTL_SECONDS) -> None:
+    def __init__(self, client: RedisCommands, ttl_seconds: int = IDEMPOTENCY_TTL_SECONDS) -> None:
         """Hold the client and the TTL the claim is written with."""
         self._client = client
         self._ttl_seconds = ttl_seconds

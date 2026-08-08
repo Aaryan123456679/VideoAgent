@@ -8,11 +8,15 @@ status, events, artifacts — are `api.md` §2.1's table and arrive with `T1.3`.
 The engine is deliberately not exported from anywhere in this package `[api.md` §6`]`: a route
 that can open a connection can open one without the row-level-security binding, and then
 tenancy is a convention rather than a guarantee.
+
+`TENANT_SETTING` is re-exported from `video_agent.persistence.rls`, which owns it. `T0.4`
+defined a second copy of the constant and a second `SET LOCAL` statement beside it; `T0.6`
+consolidated both onto `persistence.session`, so the statement is no longer part of this
+package's surface at all.
 """
 
 from video_agent.api.app import create_app
 from video_agent.api.database import (
-    SET_LOCAL_TENANT_SQL,
     TENANT_SETTING,
     Database,
     tenant_session,
@@ -31,7 +35,6 @@ from video_agent.api.principal import ApiKeyVerifier, Principal, require_tenant
 from video_agent.api.resources import ResourceFactories, Resources
 
 __all__ = [
-    "SET_LOCAL_TENANT_SQL",
     "TENANT_SETTING",
     "ApiError",
     "ApiKeyVerifier",

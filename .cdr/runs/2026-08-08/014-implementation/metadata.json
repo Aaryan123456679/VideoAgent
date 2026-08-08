@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "014-implementation",
+  "macro": "cdr-implementation",
+  "macro_version": "1",
+  "agent": "implementation",
+  "subtask": "T0.7 — LiteLLM gateway: alias resolution and failure policy (S0.7.1–S0.7.8)",
+  "git_head": "dbf7f8ff0cc18383c18a9a6a24a51d1250d79942",
+  "run_key": "t07-gateway-dbf7f8ff",
+  "status": "completed",
+  "last_completed_step": "self-consistency (lint/type/test green in scope; 38/38 mutations killed); NOT COMMITTED per instruction",
+  "started_at": "2026-08-08T08:00:00Z",
+  "ended_at": "2026-08-08T09:40:00Z"
+}

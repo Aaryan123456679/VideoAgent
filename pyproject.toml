@@ -37,6 +37,13 @@ video-agent = "video_agent.__main__:main"
 
 [dependency-groups]
 dev = [
+    # `boto3` ships no `py.typed`, so `mypy --strict` cannot import it and every S3 call site
+    # would need a suppression. S0.1.2 permits neither `[[tool.mypy.overrides]]` nor
+    # `# type: ignore`, so the stubs are the fix rather than the workaround: they are a dev
+    # dependency because they contain no runtime code, and `[s3]` because that is the only
+    # service this repository calls. `T0.4` held the slot with `UnconfiguredObjectStore`
+    # precisely until this line existed.
+    "boto3-stubs[s3]>=1.35,<2.0",
     "mypy>=1.13,<2.0",
     "pre-commit>=4.0,<5.0",
     "pytest>=8.3,<9.0",

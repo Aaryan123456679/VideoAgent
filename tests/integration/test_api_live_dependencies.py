@@ -22,7 +22,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 
 from video_agent.api.clients import build_cache, build_database
-from video_agent.api.database import SET_LOCAL_TENANT_SQL, TENANT_SETTING
+from video_agent.api.database import TENANT_SETTING
 from video_agent.api.errors import ApiError
 from video_agent.api.idempotency import (
     IdempotencyRecord,
@@ -31,6 +31,7 @@ from video_agent.api.idempotency import (
 )
 from video_agent.config.settings import get_settings
 from video_agent.observability.codes import ErrorCode
+from video_agent.persistence.session import SET_TENANT_STATEMENT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import AsyncIterator
@@ -109,7 +110,9 @@ async def test_set_local_tenant_is_visible_to_the_transaction(live_database: Dat
         bound = result.scalar_one()
 
     assert bound == str(tenant_id)
-    assert SET_LOCAL_TENANT_SQL  # the statement under test, referenced so its removal is loud
+    # The statement under test, referenced so its removal is loud. Since `T0.6` it lives in
+    # `persistence.session` — `api` no longer keeps a second copy.
+    assert str(SET_TENANT_STATEMENT)
 
 
 @pytest.mark.asyncio

@@ -8,8 +8,11 @@ The risk of a fake is that it drifts into asserting itself, so two properties ar
   each one to `DatabaseResource` / `ProbedResource`, so `mypy --strict` fails if the shape it
   stands in for changes underneath it.
 - **The production code path is never faked out.** `RecordingDatabase` delegates `tenant_scope`
-  to a genuine `Database`; the only substitution is the session it hands back. Deleting the
-  `set_config` statement from `Database.tenant_scope` therefore fails the tests that assert it,
+  to a genuine `Database`, which since `T0.6` delegates in turn to
+  `video_agent.persistence.session.tenant_session`. The substitution is the *engine*, one level
+  lower than it used to be: the fake hands back a connection that records statements, and the
+  transaction, the `set_config` and the session lifetime are all the real ones. Deleting the
+  `set_config` statement from `persistence.session` therefore fails the tests that assert it,
   which is what makes them tests rather than decoration.
 
 Named `test_api_support` so the file falls inside this task's ownership; pytest collects it and
@@ -19,14 +22,13 @@ the handful of checks in it are real.
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import TYPE_CHECKING, Annotated, Any, Final, Never, Self, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Never, cast
 from uuid import UUID
 
 import httpx
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 
 from video_agent.api.app import create_app
@@ -49,6 +51,7 @@ from video_agent.api.resources import (
 )
 from video_agent.config.settings import get_settings
 from video_agent.observability.codes import ErrorCode
+from video_agent.persistence.session import TenantSession
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import AsyncIterator, Mapping
@@ -80,59 +83,16 @@ tripped the redaction tripwire would fail the test for a different reason than t
 examination."""
 
 
-class _UnusableEngine:
-    """Stands in for the engine `Database` never touches when its sessions are injected.
+class RecordingConnection:
+    """Enough of `AsyncConnection` to see what a transaction emitted, and in what order.
 
-    Raises on any attribute access rather than being a `Mock`: if a change makes
-    `tenant_scope` reach for the engine, the test says so instead of silently recording it.
+    This is the `DatabaseConnection` protocol `persistence.session` hands to repositories, so
+    the fake is exactly as wide as the real interface and no wider.
     """
-
-    def __getattr__(self, name: str) -> Never:
-        """Refuse every attribute. `Never` because there is no value this can return."""
-        message = f"the engine must not be touched; something asked for {name!r}"
-        raise AssertionError(message)
-
-
-class _Transaction:
-    """What `RecordingSession.begin()` returns: an async context manager that logs the BEGIN."""
-
-    def __init__(self, session: RecordingSession) -> None:
-        self._session = session
-
-    async def __aenter__(self) -> RecordingSession:
-        self._session.events.append(BEGIN)
-        return self._session
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        self._session.events.append("COMMIT" if exc is None else "ROLLBACK")
-
-
-class RecordingSession:
-    """Enough of `AsyncSession` to see what a transaction actually emitted, and in what order."""
 
     def __init__(self) -> None:
         self.events: list[str] = []
         self.parameters: list[Mapping[str, Any]] = []
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        self.events.append("CLOSE")
-
-    def begin(self) -> _Transaction:
-        """Open a transaction, recording that it opened."""
-        return _Transaction(self)
 
     async def execute(
         self,
@@ -152,22 +112,67 @@ class RecordingSession:
         return None
 
 
+class _Begin:
+    """What `RecordingEngine.begin()` returns: a transaction that records that it opened."""
+
+    def __init__(self, engine: RecordingEngine) -> None:
+        self._engine = engine
+        self._connection = RecordingConnection()
+
+    async def __aenter__(self) -> RecordingConnection:
+        self._connection.events.append(BEGIN)
+        self._engine.connections.append(self._connection)
+        return self._connection
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._connection.events.append("COMMIT" if exc is None else "ROLLBACK")
+
+
+class RecordingEngine:
+    """An `AsyncEngine` whose `begin()` yields a connection that records statements.
+
+    The substitution sits here, below `persistence.session.tenant_session`, so the transaction
+    boundary, the `set_config` call and the session's close-on-exit are all production code.
+    Anything the engine is asked for other than `begin` raises, so a change that reached past
+    the transaction would say so rather than being recorded silently.
+    """
+
+    def __init__(self) -> None:
+        self.connections: list[RecordingConnection] = []
+
+    def begin(self) -> _Begin:
+        """Open a recorded transaction."""
+        return _Begin(self)
+
+    def __getattr__(self, name: str) -> Never:
+        """Refuse every other attribute. `Never` because there is no value this can return."""
+        message = (
+            f"the engine may only be used to begin a transaction; something asked for {name!r}"
+        )
+        raise AssertionError(message)
+
+
 class RecordingDatabase:
     """A `DatabaseResource` whose probe a test controls and whose scopes are the real ones."""
 
     def __init__(self, *, ping_error: Exception | None = None) -> None:
-        self.sessions: list[RecordingSession] = []
         self.closed = False
         self.pings = 0
         self._ping_error = ping_error
-        self._database = Database(cast("AsyncEngine", _UnusableEngine()), self._new_session)
+        self.engine = RecordingEngine()
+        self._database = Database(cast("AsyncEngine", self.engine))
 
-    def _new_session(self) -> AsyncSession:
-        session = RecordingSession()
-        self.sessions.append(session)
-        return cast("AsyncSession", session)
+    @property
+    def sessions(self) -> list[RecordingConnection]:
+        """Every connection a scope has opened, in order."""
+        return self.engine.connections
 
-    def tenant_scope(self, tenant_id: UUID) -> AbstractAsyncContextManager[AsyncSession]:
+    def tenant_scope(self, tenant_id: UUID) -> AbstractAsyncContextManager[TenantSession]:
         """Delegate to the real implementation. Nothing about the SQL is faked."""
         return self._database.tenant_scope(tenant_id)
 
@@ -182,8 +187,8 @@ class RecordingDatabase:
         self.closed = True
 
     @property
-    def last_session(self) -> RecordingSession:
-        """The most recently opened session."""
+    def last_session(self) -> RecordingConnection:
+        """The most recently opened connection."""
         return self.sessions[-1]
 
 
@@ -317,10 +322,10 @@ async def whoami(principal: Annotated[Principal, Depends(require_tenant)]) -> di
 @probe_router.get("/scope")
 async def read_scope(
     request: Request,
-    session: Annotated[AsyncSession, Depends(tenant_session)],
+    session: Annotated[TenantSession, Depends(tenant_session)],
 ) -> dict[str, str | None]:
     """Report the tenant the session was actually scoped to, plus what the request claimed."""
-    recorded = cast("RecordingSession", session)
+    recorded = cast("RecordingConnection", session.connection)
     return {
         "session_tenant_id": recorded.tenant_parameter,
         "header_tenant_id": request.headers.get("X-Tenant-Id"),
@@ -330,10 +335,10 @@ async def read_scope(
 @probe_router.post("/scope")
 async def write_scope(
     body: TenantBody,
-    session: Annotated[AsyncSession, Depends(tenant_session)],
+    session: Annotated[TenantSession, Depends(tenant_session)],
 ) -> dict[str, str | None]:
     """Same, for a tenant id supplied in a JSON body."""
-    recorded = cast("RecordingSession", session)
+    recorded = cast("RecordingConnection", session.connection)
     return {
         "session_tenant_id": recorded.tenant_parameter,
         "body_tenant_id": str(body.tenant_id) if body.tenant_id else None,
@@ -421,14 +426,26 @@ def test_fakes_satisfy_the_resource_protocols() -> None:
 
 @pytest.mark.asyncio
 async def test_recording_database_delegates_to_the_real_scope() -> None:
-    """The fake supplies a session; the statement inside the scope comes from `Database`."""
+    """The fake supplies a connection; the transaction and the binding come from `persistence`."""
     database = RecordingDatabase()
 
-    async with database.tenant_scope(TENANT_A):
-        pass
+    async with database.tenant_scope(TENANT_A) as session:
+        assert session.tenant_id == TENANT_A
 
     assert database.last_session.events[0] == BEGIN
     assert database.last_session.tenant_parameter == str(TENANT_A)
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_session_is_the_persistence_one() -> None:
+    """Not a look-alike: the scope yields `persistence.session.TenantSession` itself.
+
+    Which is what makes `test_api_session`'s assertions assertions about production code.
+    """
+    database = RecordingDatabase()
+
+    async with database.tenant_scope(TENANT_A) as session:
+        assert isinstance(session, TenantSession)
 
 
 @pytest.mark.asyncio

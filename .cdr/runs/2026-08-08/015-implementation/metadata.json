@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/015-implementation",
+  "macro": "cdr-implementation",
+  "macro_version": "1",
+  "agent": "implementation",
+  "subtask": "T0.6 (S0.6.1-S0.6.3) + persistence-boundary consolidation + URL credential typing",
+  "git_head": "dbf7f8ff0cc18383c18a9a6a24a51d1250d79942",
+  "run_key": "t06-redis-artifacts-dbf7f8ff",
+  "status": "completed",
+  "last_completed_step": "self-consistency",
+  "started_at": "2026-08-08T06:10:00Z",
+  "ended_at": "2026-08-08T09:10:00Z"
+}

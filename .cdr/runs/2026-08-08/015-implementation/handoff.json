@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "run_id": "2026-08-08/015-implementation",
+  "agent": "implementation",
+  "subtask": "T0.6 — Redis and artifact storage (S0.6.1, S0.6.2, S0.6.3)",
+  "status": "completed",
+  "created": [
+    "src/video_agent/persistence/keys.py",
+    "src/video_agent/persistence/redis_client.py",
+    "src/video_agent/persistence/queue.py",
+    "src/video_agent/persistence/objects.py",
+    "src/video_agent/persistence/presign.py",
+    "tests/unit/test_persistence_redis_keys.py",
+    "tests/unit/test_persistence_redis_support.py",
+    "tests/unit/test_persistence_redis_client.py",
+    "tests/unit/test_persistence_queue.py",
+    "tests/unit/test_persistence_objects.py",
+    "tests/unit/test_persistence_presign.py",
+    "tests/unit/test_api_idempotency_store.py",
+    "tests/integration/test_persistence_redis.py",
+    "tests/integration/test_persistence_object_store.py",
+    "tests/_fixtures/adhoc_redis_key_case.py"
+  ],
+  "modified": [
+    "src/video_agent/api/clients.py",
+    "src/video_agent/api/database.py",
+    "src/video_agent/api/resources.py",
+    "src/video_agent/api/__init__.py",
+    "src/video_agent/api/idempotency.py",
+    "src/video_agent/persistence/__init__.py",
+    "pyproject.toml",
+    "uv.lock",
+    "tests/unit/test_persistence_boundary.py",
+    "tests/unit/test_api_support.py",
+    "tests/unit/test_api_session.py",
+    "tests/integration/test_api_live_dependencies.py"
+  ],
+  "index_keys": {
+    "redis_key_registry": "src/video_agent/persistence/keys.py:KEY_REGISTRY",
+    "redis_ttl_enforcement": "src/video_agent/persistence/redis_client.py:require_ttl",
+    "at_least_once_queue": "src/video_agent/persistence/queue.py:JobQueue",
+    "artifact_layout": "src/video_agent/persistence/objects.py:storage_key",
+    "artifact_verification": "src/video_agent/persistence/objects.py:ArtifactStore.upload",
+    "presign_minting": "src/video_agent/persistence/presign.py:mint_artifact_url",
+    "boundary_gate": "tests/unit/test_persistence_boundary.py",
+    "adhoc_key_gate": "tests/unit/test_persistence_redis_keys.py:adhoc_key_literals"
+  },
+  "open_items": [
+    "config/settings.py: DATABASE_URL and REDIS_URL remain plain str; SecretStr change is out of ownership",
+    "observability/logging.py: root-logger JSON handler routes botocore DEBUG signing material; bare hex signature not caught by shape rules",
+    "gateway/cache.py: CACHE_KEY_PREFIX literal, exempted in PENDING_REGISTRY_ADOPTION until it adopts llm_cache_key",
+    "observability/codes.registry.json: VA-STORE-001 description is write-only while persistence.md 9 assigns it to object-store unavailability in both directions"
+  ]
+}

@@ -1,96 +1,138 @@
 """The concrete clients behind the resource protocols, and how they are built from settings.
 
-Kept apart from `resources.py` so the lifespan's contract — open these, close all of them —
-does not import a driver. It also means the two things that would otherwise be tangled stay
+Kept apart from `resources.py` so the lifespan's contract — open these, close all of them — does
+not import a driver. It also means the two things that would otherwise be tangled stay
 separable: the *policy* (order, partial-failure handling) is unit-testable with fakes, and the
 *wiring* (URLs, credentials) is the part that needs a live dependency and is exercised under
 `@pytest.mark.integration`.
 
-**Constructing a client is not connecting.** `create_async_engine` and `Redis.from_url` both
-return immediately and connect lazily, which is why a process with no database still starts and
-answers `/healthz` — and why `/readyz` has to issue a real query rather than check that an
+**Constructing a client is not connecting.** The engine, `Redis.from_url` and `boto3.client` all
+return immediately and connect lazily, which is why a process with no dependencies still starts
+and answers `/healthz` — and why `/readyz` has to issue a real query rather than check that an
 object exists.
 
-**The object store has a slot but not yet a client.** `api.md` §7 gives presigned-URL minting to
-`persistence`, so the S3-dialect client belongs there; and `boto3` ships neither type stubs nor
-a `py.typed` marker, which `mypy --strict` with no `overrides` table cannot import at all.
-Rather than reach for a suppression, the slot holds `UnconfiguredObjectStore`: it opens, it
-closes, and any attempt to *use* it raises `VA-STORE-002` rather than quietly succeeding. That
-is the same shape as `UnconfiguredApiKeyVerifier` in `principal.py`, and for the same reason —
-a missing dependency should be impossible to mistake for a working one. Nothing in `T0.4`
-touches artifacts, so nothing calls it.
+**Nothing here builds an engine or a session.** `T0.4` did, and `T0.5` shipped a boundary gate
+with a temporary exemption naming this file for it. `build_database` now calls
+`video_agent.persistence.create_database_engine`, so pool configuration, `echo` policy and the
+tenant binding have one home; the exemption is gone.
+
+**The object store is a real client now.** `T0.4` held the slot with `UnconfiguredObjectStore`
+because `boto3` ships no `py.typed` and `mypy --strict` with no `overrides` table cannot import
+it. The fix was the type stubs, not a suppression: `boto3-stubs[s3]` is in the dev group and
+`persistence.objects` owns the dialect. The placeholder is gone with the reason for it.
+
+**No URL and no credential is constructed, logged or interpolated here.** Each value goes from
+`Settings` straight into the client that needs it. `DATABASE_URL` and `REDIS_URL` carry
+passwords in their userinfo; see the note on `build_cache`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
-
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import create_async_engine
+from typing import TYPE_CHECKING, Protocol
 
 from video_agent.api.database import Database
-from video_agent.api.errors import ApiError
+from video_agent.api.idempotency import RedisIdempotencyStore
 from video_agent.api.resources import ResourceFactories
-from video_agent.observability.codes import ErrorCode
+from video_agent.persistence.objects import ArtifactStore, S3ObjectTransport, create_s3_client
+from video_agent.persistence.queue import JobQueue, RedisStreamCommands
+from video_agent.persistence.redis_client import RedisCommands, RedisStore, create_redis_client
+from video_agent.persistence.session import create_database_engine
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from video_agent.api.idempotency import IdempotencyStore
     from video_agent.config.settings import Settings
-
-POOL_PRE_PING: Final = True
-"""Validate a pooled connection before handing it out. Without it the first request after a
-database restart fails with a stale connection, which reads as an application bug."""
 
 
 def build_database(settings: Settings) -> Database:
-    """An engine bound to `DATABASE_URL`, wrapped so routes only ever see tenant scopes."""
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=POOL_PRE_PING)
-    return Database(engine)
+    """An engine from `persistence`, wrapped so routes only ever see tenant scopes."""
+    return Database(create_database_engine(settings))
+
+
+class RedisClient(RedisCommands, RedisStreamCommands, Protocol):
+    """Both halves of what this process asks of Redis, in one name.
+
+    `redis.asyncio.Redis` satisfies each of the two protocols independently, but a parameter
+    has to be annotated with something, and naming the concrete driver here would make the
+    lifespan untestable without a server — which is exactly how `[D-17]`'s refusal path went
+    unexercised until `T0.6`. Python has no intersection type, so the intersection is written
+    as a protocol that inherits both.
+    """
 
 
 class Cache:
-    """Redis, as `/readyz` and the idempotency store need it."""
+    """Redis, as `/readyz`, the idempotency store and the job queue all need it.
 
-    def __init__(self, client: Redis) -> None:
+    One client, three consumers. `redis.asyncio.Redis` satisfies both
+    `persistence.redis_client.RedisCommands` and `persistence.queue.RedisStreamCommands`, so
+    the queue and the key/value store share a connection pool rather than opening two.
+    """
+
+    def __init__(self, client: RedisClient) -> None:
         """Wrap an already-constructed client so a test can supply its own."""
         self.client = client
+        self.store = RedisStore(client)
+        self.queue = JobQueue(client)
+
+    def idempotency_store(self) -> IdempotencyStore:
+        """The production idempotency store `[D-16]`, `[D-17]`.
+
+        Built here rather than per request: the store is stateless over the client, and a route
+        that constructed its own would be a route that could construct a different one. `T0.4`
+        implemented the mechanism and left this unwired, which meant a dead Redis had no path to
+        the `503` that `[D-17]` requires — nothing in the process held a `RedisIdempotencyStore`
+        at all.
+        """
+        return RedisIdempotencyStore(self.client)
 
     async def ping(self) -> None:
         """Raise if Redis cannot be reached."""
-        await self.client.ping()
+        await self.store.ping()
 
     async def aclose(self) -> None:
         """Close the connection pool."""
-        await self.client.aclose()
+        await self.store.aclose()
 
 
 def build_cache(settings: Settings) -> Cache:
-    """A Redis client bound to `REDIS_URL`, decoding replies as text."""
-    return Cache(Redis.from_url(settings.REDIS_URL, decode_responses=True))
+    """A Redis client bound to `REDIS_URL`.
+
+    `REDIS_URL` is a plain `str` in `Settings` and carries a password in its userinfo. It is
+    read once, here, and handed straight to the driver — it is never formatted into a message,
+    an f-string or a log line anywhere in this package. `observability.redaction` catches the
+    shape on the logging path (`is_credentialed_url`), but that net does not cover an exception
+    message or a debugger frame, so the discipline is to not construct the string at all. Making
+    the field a `SecretStr` would close the remaining gap and belongs in `config/settings.py`;
+    see this task's report.
+    """
+    return Cache(create_redis_client(settings))
 
 
-class UnconfiguredObjectStore:
-    """Holds the object-store slot open, and refuses to pretend it can store anything.
+class ObjectStore:
+    """The artifact store, as the lifespan sees it: something that opens and closes.
 
-    `aclose` succeeds, because there is genuinely nothing to release and a shutdown path that
-    raises would mask the reason for the shutdown. `presign` raises, because returning a
-    plausible URL that resolves to nothing is the failure mode `[CPS §Failure behaviour]` calls
-    dishonest: the caller would hand it to a customer.
+    A thin holder rather than an alias for `ArtifactStore` because the lifespan's contract is
+    `aclose()` and `ArtifactStore`'s contract is upload/download/verify. Keeping them apart
+    means the store can be handed to a worker without also handing over the right to close the
+    process-wide client.
     """
 
-    async def presign(self, storage_key: str) -> str:
-        """Always raises `VA-STORE-002`. See the class docstring."""
-        raise ApiError(
-            ErrorCode.VA_STORE_002,
-            log_detail=f"no object store client is configured; cannot presign {storage_key}",
-        )
+    def __init__(self, transport: S3ObjectTransport) -> None:
+        """Hold the transport and the policy layer built over it."""
+        self.transport = transport
+        self.artifacts = ArtifactStore(transport)
 
     async def aclose(self) -> None:
-        """Nothing to release."""
+        """Release the HTTP session the S3 client holds."""
+        await self.transport.aclose()
 
 
-def build_object_store(_settings: Settings) -> UnconfiguredObjectStore:
-    """The object-store slot. See the module docstring for why it is not an S3 client yet."""
-    return UnconfiguredObjectStore()
+def build_object_store(settings: Settings) -> ObjectStore:
+    """An S3-compatible client bound to `ARTIFACT_BUCKET`.
+
+    The credentials stay inside their `SecretStr` until `create_s3_client` hands them to
+    `boto3`; nothing in this module ever holds the plaintext.
+    """
+    return ObjectStore(S3ObjectTransport(create_s3_client(settings), settings.ARTIFACT_BUCKET))
 
 
 def default_factories(settings: Settings) -> ResourceFactories:
@@ -102,7 +144,7 @@ def default_factories(settings: Settings) -> ResourceFactories:
     async def cache() -> Cache:
         return build_cache(settings)
 
-    async def object_store() -> UnconfiguredObjectStore:
+    async def object_store() -> ObjectStore:
         return build_object_store(settings)
 
     return ResourceFactories(database=database, cache=cache, object_store=object_store)
