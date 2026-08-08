@@ -32,8 +32,9 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Final
 
 DEFAULT_FFMPEG_VERSION = "7.1"
 """Default version pin. Must equal the ``FFMPEG_REQUIRED_VERSION`` default in
@@ -216,3 +217,184 @@ def assert_media_toolchain(probe: VersionProbe = _probe_version) -> None:
             f"absolute paths of one matched install."
         )
         raise MediaToolchainError(message)
+
+
+# ---------------------------------------------------------------------------------------------
+# T2.4 — normalize / concatenate / thumbnail. `assembly.md` §4.
+#
+# These three functions are the only place this module (or `graph.nodes.assemble_node`, their
+# one caller) actually shells out to manipulate media, as opposed to merely asserting the
+# toolchain that will. Same safety rules as `assert_media_toolchain`/`frame_extraction.py`:
+# argv-list only, never `shell=True`, and every binary path comes from `resolve_binary` — never
+# a bare name that could resolve differently from the one version-pin-checked at startup.
+# ---------------------------------------------------------------------------------------------
+
+CANONICAL_WIDTH: Final = 1280
+CANONICAL_HEIGHT: Final = 720
+CANONICAL_FPS: Final = 24
+CANONICAL_VIDEO_CODEC: Final = "libx264"
+CANONICAL_VIDEO_PROFILE: Final = "high"
+CANONICAL_PIXEL_FORMAT: Final = "yuv420p"
+"""`assembly.md` §4.1's canonical delivery profile (`[D-46]`): MP4 / H.264 High `yuv420p` at
+1280x720, 24fps CFR, BT.709 limited range, no audio unless a music bed is mixed in (v1 mixes
+none — see `graph.nodes.assemble_node`'s docstring, `[D-69]`), `faststart`.
+
+Hardcoded rather than read from the configured target-resolution setting: `graph.deps.GraphDeps`
+carries no settings object — the same documented v1 gap `graph/nodes.py`'s `_PROVIDER_TIMEOUT_S`
+names — and every shot is already requested from a provider at `Capability.RES_720P`
+(`providers.models.ShotRequest.resolution` defaults to `"720p"`), so 1280x720 is not a guess, it
+is the resolution every accepted clip is already generated at. Threading `Settings` through the
+graph so this tracks that setting at runtime is out of scope for T2.4."""
+
+_NORMALIZE_TIMEOUT_S: Final = 60.0
+_CONCAT_TIMEOUT_S: Final = 30.0
+_THUMBNAIL_TIMEOUT_S: Final = 15.0
+
+
+class AssemblyError(RuntimeError):
+    """One ffmpeg invocation in the assemble pipeline failed — a bad exit, a timeout, or an
+    exit-0 with no output file. Distinct from `MediaToolchainError`, which is about the
+    toolchain's presence or version, never about one call's outcome."""
+
+
+def _ffmpeg_path() -> str:
+    resolved = resolve_binary("ffmpeg")
+    if resolved is None:
+        message = "ffmpeg is required for assembly but was not found on PATH"
+        raise MediaToolchainError(message)
+    return resolved
+
+
+def _run(argv: list[str], *, timeout_s: float) -> None:
+    try:
+        completed = subprocess.run(argv, capture_output=True, timeout=timeout_s, check=False)
+    except subprocess.TimeoutExpired as exc:
+        message = f"{argv[0]} did not finish within {timeout_s}s"
+        raise AssemblyError(message) from exc
+    except OSError as exc:
+        detail = exc.strerror or str(exc)
+        message = f"{argv[0]} could not be executed: {detail}"
+        raise AssemblyError(message) from exc
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace").strip()[-2000:]
+        message = f"{argv[0]} exited {completed.returncode}: {stderr}"
+        raise AssemblyError(message)
+
+
+def _require_output(output_path: Path, *, what: str) -> None:
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        message = f"ffmpeg exited 0 but produced no {what} at {output_path}"
+        raise AssemblyError(message)
+
+
+def normalize_clip(
+    input_path: Path, output_path: Path, *, timeout_s: float = _NORMALIZE_TIMEOUT_S
+) -> None:
+    """Normalize one clip to the canonical profile so the concat that follows is a pure stream
+    copy. `assembly.md` §4.1: "normalise every clip to one canonical profile, then concatenate."
+
+    Scales-and-pads to preserve aspect ratio rather than a plain `scale` that could distort a
+    provider's output, retimes to `CANONICAL_FPS` CFR, and strips audio unconditionally — v1
+    never mixes in a music bed at this stage (`[D-69]`; see `assemble_node`).
+    """
+    ffmpeg = _ffmpeg_path()
+    video_filter = (
+        f"scale={CANONICAL_WIDTH}:{CANONICAL_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={CANONICAL_WIDTH}:{CANONICAL_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+        f"fps={CANONICAL_FPS}"
+    )
+    argv = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        video_filter,
+        "-c:v",
+        CANONICAL_VIDEO_CODEC,
+        "-profile:v",
+        CANONICAL_VIDEO_PROFILE,
+        "-pix_fmt",
+        CANONICAL_PIXEL_FORMAT,
+        "-colorspace",
+        "bt709",
+        "-color_primaries",
+        "bt709",
+        "-color_trc",
+        "bt709",
+        "-color_range",
+        "tv",
+        "-an",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    _run(argv, timeout_s=timeout_s)
+    _require_output(output_path, what="normalized clip")
+
+
+def concat_clips(
+    clip_paths: Sequence[Path], output_path: Path, *, timeout_s: float = _CONCAT_TIMEOUT_S
+) -> None:
+    """Concatenate already-normalized clips, in order, by stream copy. `[D-47]`: hard cuts
+    only — there is no crossfade parameter here and none is ever added while that decision
+    holds.
+
+    Uses the concat demuxer over a generated file list rather than the concat *filter*, because
+    every input already shares the canonical profile — nothing to filter, only to copy.
+    `clip_paths` are internally generated scratch-directory paths, never user or model text
+    (`assembly.md` §6), so writing them into the list file carries no injection risk.
+    """
+    if not clip_paths:
+        message = "concat_clips called with zero clips"
+        raise AssemblyError(message)
+    ffmpeg = _ffmpeg_path()
+    list_path = output_path.parent / f"{output_path.stem}-concat-list.txt"
+    list_path.write_text("".join(f"file '{clip.resolve()}'\n" for clip in clip_paths))
+    argv = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    _run(argv, timeout_s=timeout_s)
+    _require_output(output_path, what="concatenated video")
+
+
+def build_thumbnail(
+    png_path: Path, output_path: Path, *, timeout_s: float = _THUMBNAIL_TIMEOUT_S
+) -> None:
+    """Re-encode an already-extracted continuity-frame PNG into the canonical JPEG thumbnail.
+
+    `[D-49]`: the thumbnail is the highest-scoring accepted shot's frame, and `assemble_node`
+    reuses the PNG `extract_final_frame_node` already produced for that shot rather than
+    re-extracting one from the clip — this function only re-encodes and fits it to the
+    canonical geometry, it never touches a video stream.
+    """
+    ffmpeg = _ffmpeg_path()
+    video_filter = (
+        f"scale={CANONICAL_WIDTH}:{CANONICAL_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={CANONICAL_WIDTH}:{CANONICAL_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
+    )
+    argv = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(png_path),
+        "-vf",
+        video_filter,
+        "-frames:v",
+        "1",
+        str(output_path),
+    ]
+    _run(argv, timeout_s=timeout_s)
+    _require_output(output_path, what="thumbnail")

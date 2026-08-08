@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Final
 
 from fastapi import FastAPI
 
+from video_agent.api.artifacts import router as artifacts_router
 from video_agent.api.clients import default_factories
 from video_agent.api.handlers import register_exception_handlers
 from video_agent.api.health import router as health_router
@@ -88,4 +89,5 @@ def create_app(
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(jobs_router)
+    app.include_router(artifacts_router)
     return app

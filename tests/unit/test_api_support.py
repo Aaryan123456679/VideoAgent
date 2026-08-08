@@ -44,6 +44,7 @@ from video_agent.api.principal import (
     require_tenant,
 )
 from video_agent.api.resources import (
+    ClosableResource,
     DatabaseResource,
     ProbedResource,
     ResourceFactories,
@@ -355,11 +356,12 @@ def build_resources(
     *,
     database: DatabaseResource | None = None,
     cache: ProbedResource | None = None,
+    object_store: ClosableResource | None = None,
 ) -> Resources:
     """A `Resources` whose factories hand back the objects the test supplied."""
     resolved_database = database if database is not None else RecordingDatabase()
     resolved_cache = cache if cache is not None else RecordingProbe()
-    store = RecordingProbe()
+    resolved_store = object_store if object_store is not None else RecordingProbe()
 
     async def open_database() -> DatabaseResource:
         return resolved_database
@@ -367,8 +369,8 @@ def build_resources(
     async def open_cache() -> ProbedResource:
         return resolved_cache
 
-    async def open_store() -> ProbedResource:
-        return store
+    async def open_store() -> ClosableResource:
+        return resolved_store
 
     return Resources(
         ResourceFactories(database=open_database, cache=open_cache, object_store=open_store)

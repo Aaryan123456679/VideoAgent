@@ -24,6 +24,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from video_agent.assembly.media_toolchain import build_thumbnail, concat_clips, normalize_clip
+from video_agent.assembly.models import DeliveryManifest, ManifestEntry
 from video_agent.gateway.models import ArtifactRef
 from video_agent.graph.deps import GraphDeps
 from video_agent.graph.frame_extraction import STEP_BACK_ATTEMPTS, find_last_usable_frame
@@ -638,15 +640,227 @@ async def route_after_qc(state: JobState, deps: GraphDeps) -> str:
 
 
 # ---------------------------------------------------------------------------
-# assemble / deliver — T2.4, stubbed here
+# assemble / deliver — T2.4
 # ---------------------------------------------------------------------------
+
+_FINAL_VIDEO_CONTENT_TYPE = "video/mp4"
+_THUMBNAIL_CONTENT_TYPE = "image/jpeg"
+
+
+def _accepted_shots_in_order(state: JobState) -> list[ShotState]:
+    return sorted(
+        (shot for shot in state.shots if shot.status is ShotStatus.ACCEPTED),
+        key=lambda shot: shot.index,
+    )
+
+
+def _best_thumbnail_source(accepted: list[ShotState]) -> ShotState:
+    """`[D-49]`: the highest-`best_score` accepted shot's frame, falling back through the next
+    best when the top scorer has no usable continuity frame (`extract_final_frame_node` leaves
+    `final_frame_artifact_id` unset on total extraction failure — `assembly.md` §8's "no anchor,
+    degraded=true" path). Raises only when *no* accepted shot has one at all.
+    """
+    candidates = sorted(
+        (shot for shot in accepted if shot.final_frame_artifact_id is not None),
+        key=lambda shot: (-(shot.best_score if shot.best_score is not None else 0.0), shot.index),
+    )
+    if not candidates:
+        message = (
+            "no accepted shot has a final_frame_artifact_id; assemble cannot select a "
+            "thumbnail source"
+        )
+        raise GraphInvariantError(message)
+    return candidates[0]
+
+
+async def _fetch_clip_and_frame_records(
+    state: JobState, deps: GraphDeps, *, accepted: list[ShotState], thumbnail_shot: ShotState
+) -> tuple[list[ArtifactRecord], ArtifactRecord]:
+    """Phase 1: resolve every accepted shot's clip, plus the one continuity frame the
+    thumbnail is built from — all reads, in one transaction, before any ffmpeg runs.
+    """
+    frame_artifact_id = thumbnail_shot.final_frame_artifact_id
+    if frame_artifact_id is None:  # pragma: no cover - guarded by _best_thumbnail_source
+        message = "thumbnail_shot has no final_frame_artifact_id"
+        raise GraphInvariantError(message)
+
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        artifact_repo = ArtifactRepository(session)
+        clip_records: list[ArtifactRecord] = []
+        for shot in accepted:
+            if shot.clip_artifact_id is None:
+                message = (
+                    f"assemble reached for job {state.job_id} shot {shot.index} accepted "
+                    "with no clip_artifact_id"
+                )
+                raise GraphInvariantError(message)
+            record = await artifact_repo.get(shot.clip_artifact_id)
+            if record is None:
+                message = (
+                    f"artifact {shot.clip_artifact_id} named by shot {shot.index}'s "
+                    f"clip_artifact_id was not found for job {state.job_id}"
+                )
+                raise GraphInvariantError(message)
+            clip_records.append(record)
+
+        frame_record = await artifact_repo.get(frame_artifact_id)
+        if frame_record is None:
+            message = (
+                f"artifact {frame_artifact_id} named by shot {thumbnail_shot.index}'s "
+                f"final_frame_artifact_id was not found for job {state.job_id}"
+            )
+            raise GraphInvariantError(message)
+    return clip_records, frame_record
+
+
+async def _render_final_video_and_thumbnail(
+    state: JobState, ctx: NodeContext, *, clip_bytes_list: list[bytes], frame_bytes: bytes
+) -> tuple[bytes, bytes]:
+    """Phase 2: normalize + concat (`[D-46]`/`[D-47]`) and re-encode the thumbnail, entirely in
+    a scratch directory. `assembly.md` §6: every ffmpeg call is awaited via an executor, never
+    inline in the event loop — `normalize_clip`/`concat_clips`/`build_thumbnail` shell out
+    synchronously and are wrapped in `asyncio.to_thread` at this, their one call site.
+    """
+    with tempfile.TemporaryDirectory(prefix=f"assemble-{state.job_id}-") as scratch:
+        scratch_path = Path(scratch)
+
+        ctx.require_tool("ffmpeg.concat")
+        normalized_paths: list[Path] = []
+        for index, clip_bytes in enumerate(clip_bytes_list):
+            raw_path = scratch_path / f"raw-{index}.mp4"
+            norm_path = scratch_path / f"norm-{index}.mp4"
+            await asyncio.to_thread(raw_path.write_bytes, clip_bytes)
+            await asyncio.to_thread(normalize_clip, raw_path, norm_path)
+            normalized_paths.append(norm_path)
+
+        final_path = scratch_path / "final.mp4"
+        await asyncio.to_thread(concat_clips, normalized_paths, final_path)
+        final_bytes = await asyncio.to_thread(final_path.read_bytes)
+
+        ctx.require_tool("ffmpeg.thumbnail")
+        source_png = scratch_path / "thumbnail-source.png"
+        thumb_path = scratch_path / "thumbnail.jpg"
+        await asyncio.to_thread(source_png.write_bytes, frame_bytes)
+        await asyncio.to_thread(build_thumbnail, source_png, thumb_path)
+        thumbnail_bytes = await asyncio.to_thread(thumb_path.read_bytes)
+    return final_bytes, thumbnail_bytes
+
+
+async def _catalogue_final_video_and_thumbnail(
+    state: JobState,
+    deps: GraphDeps,
+    *,
+    final_bytes: bytes,
+    thumbnail_bytes: bytes,
+) -> tuple[ArtifactRecord, ArtifactRecord]:
+    """Phase 3: upload both renders, then catalogue them in one transaction."""
+    final_ref = await deps.artifacts.write(content_type=_FINAL_VIDEO_CONTENT_TYPE, data=final_bytes)
+    thumbnail_ref = await deps.artifacts.write(
+        content_type=_THUMBNAIL_CONTENT_TYPE, data=thumbnail_bytes
+    )
+
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        artifact_repo = ArtifactRepository(session)
+        final_video_record = await artifact_repo.record(
+            NewArtifact(
+                job_id=state.job_id,
+                kind=ArtifactKind.FINAL_VIDEO,
+                storage_key=final_ref.storage_key,
+                content_type=_FINAL_VIDEO_CONTENT_TYPE,
+                size_bytes=len(final_bytes),
+                checksum_sha256=sha256_of(final_bytes),
+            )
+        )
+        thumbnail_record = await artifact_repo.record(
+            NewArtifact(
+                job_id=state.job_id,
+                kind=ArtifactKind.THUMBNAIL,
+                storage_key=thumbnail_ref.storage_key,
+                content_type=_THUMBNAIL_CONTENT_TYPE,
+                size_bytes=len(thumbnail_bytes),
+                checksum_sha256=sha256_of(thumbnail_bytes),
+            )
+        )
+    return final_video_record, thumbnail_record
+
+
+def _music_bed_partial(state: JobState) -> dict[str, Any]:
+    """`[D-48]`/`[D-69]`: a requested music bed is a documented, non-fatal no-op — v1 ships no
+    bundled library and no caller-supplied-audio fetch is wired anywhere in this repo, so the
+    job is delivered silent and flagged `degraded` rather than inventing a fake library or
+    blocking delivery over optional audio.
+    """
+    if not state.music_bed:
+        return {}
+    reason = (
+        "music_bed was requested but v1 has no bundled or caller-supplied audio library "
+        "wired up; delivered silent `[D-48]`/`[D-69]`"
+    )
+    return {
+        "degraded": True,
+        "degraded_reason": (
+            reason if not state.degraded_reason else f"{state.degraded_reason}; {reason}"
+        ),
+    }
 
 
 async def assemble_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
-    """T2.4: normalize, concatenate by stream copy, thumbnail from the best accepted shot."""
-    del state, deps
-    message = "assemble_node is a T2.4 stub; concatenation/thumbnailing is not wired in yet"
-    raise NotImplementedError(message)
+    """T2.4: normalize every accepted shot's clip to the canonical delivery profile
+    (`assembly.md` §4.1 `[D-46]`; see `assembly.media_toolchain`'s `CANONICAL_*` constants —
+    1280x720, 24fps CFR, H.264 High `yuv420p`, BT.709 limited, `faststart`), concatenate by
+    stream copy only (`[D-47]`: hard cuts, never a crossfade — no such logic exists here), and
+    pick the thumbnail from the highest-`best_score` accepted shot's already-extracted
+    continuity frame (`[D-49]`) rather than re-extracting one from the clip.
+
+    `[D-73]`/`assembly.md` §5: zero accepted shots is not an empty video, it is the
+    "no playable video artifact" case — a `GraphInvariantError`, the same "should never happen,
+    stop rather than paper over it" signal `graph.md` §8 uses elsewhere, not a silently empty
+    manifest.
+
+    **Known v1 gaps**, documented rather than silent: the concatenated output is not re-probed
+    with `ffprobe` for duration/stream-count before being catalogued (`assembly.md` §6's
+    "unprobed output is not a deliverable"), and partial assembly (`assembly.md` §5 — including
+    abandoned-but-clipped shots) is out of scope, matching `route_after_qc`'s v1 note that the
+    repair back-edge and therefore `abandoned` shots with a usable clip are unreachable while
+    `qc_shot` unconditionally accepts.
+    """
+    accepted = _accepted_shots_in_order(state)
+    if not accepted:
+        message = (
+            f"assemble reached for job {state.job_id} with zero accepted shots; a "
+            "zero-deliverable job is a real error, not an empty video `[D-73]`"
+        )
+        raise GraphInvariantError(message)
+    thumbnail_shot = _best_thumbnail_source(accepted)
+
+    ctx = NodeContext.for_node(
+        job_id=state.job_id,
+        node="assemble",
+        trace_id=state.trace_id,
+        budget_remaining=state.budget.view(deps.now()),
+        bible=state.bible,
+    )
+
+    clip_records, frame_record = await _fetch_clip_and_frame_records(
+        state, deps, accepted=accepted, thumbnail_shot=thumbnail_shot
+    )
+    clip_bytes_list = [await deps.artifacts.read(_artifact_ref(record)) for record in clip_records]
+    frame_bytes = await deps.artifacts.read(_artifact_ref(frame_record))
+
+    final_bytes, thumbnail_bytes = await _render_final_video_and_thumbnail(
+        state, ctx, clip_bytes_list=clip_bytes_list, frame_bytes=frame_bytes
+    )
+
+    ctx.require_tool("artifact.write")
+    final_video_record, thumbnail_record = await _catalogue_final_video_and_thumbnail(
+        state, deps, final_bytes=final_bytes, thumbnail_bytes=thumbnail_bytes
+    )
+
+    return {
+        "final_video_artifact_id": final_video_record.id,
+        "thumbnail_artifact_id": thumbnail_record.id,
+        **_music_bed_partial(state),
+    }
 
 
 async def route_after_assemble(state: JobState, deps: GraphDeps) -> str:
@@ -657,10 +871,30 @@ async def route_after_assemble(state: JobState, deps: GraphDeps) -> str:
 async def deliver_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
     """T2.4: build the delivery manifest (`assembly.models.DeliveryManifest`). No router follows
     this node — `graph.md` §3 wires `deliver -> finalize` as a direct edge.
+
+    `[D-52]`: the manifest names artifacts by id only, never a presigned URL — presigning
+    happens once, at API-response time, via `persistence.presign` (see `api/artifacts.py`), not
+    here and not into checkpointed state.
+
+    `deliver`'s tool grant (`harness.grants.GRANTS["deliver"]`) includes `artifact.presign`,
+    but this node never calls it: that grant is for the future per-job resume/regeneration
+    surface `graph.md` defers to E3, not for v1's deliver, which only ever assembles ids it
+    already has.
     """
-    del state, deps
-    message = "deliver_node is a T2.4 stub; manifest construction is not wired in yet"
-    raise NotImplementedError(message)
+    del deps
+    if state.final_video_artifact_id is None or state.thumbnail_artifact_id is None:
+        message = (
+            f"deliver reached for job {state.job_id} without both a final video and a "
+            "thumbnail artifact id; route_after_assemble should have caught it"
+        )
+        raise GraphInvariantError(message)
+    manifest = DeliveryManifest(
+        entries=[
+            ManifestEntry(kind="video", artifact_id=state.final_video_artifact_id),
+            ManifestEntry(kind="thumbnail", artifact_id=state.thumbnail_artifact_id),
+        ]
+    )
+    return {"manifest": manifest}
 
 
 # ---------------------------------------------------------------------------
