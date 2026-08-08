@@ -27,6 +27,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Final
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from video_agent.api.artifacts import router as artifacts_router
 from video_agent.api.clients import default_factories
@@ -59,6 +60,7 @@ def create_app(
     resources: Resources | None = None,
     verifier: ApiKeyVerifier | None = None,
     provider_registry: ProviderRegistry | None = None,
+    cors_origins: tuple[str, ...] | None = None,
 ) -> FastAPI:
     """Build a configured application.
 
@@ -67,6 +69,10 @@ def create_app(
     the deny-everything verifier that `T0.5`'s credential store will replace, and no provider
     webhook registry — `api.webhooks` answers `503` until one is supplied, which is a real,
     working configuration (polling is what runs with none at all), not a placeholder.
+
+    `cors_origins` is `None` by default and adds no middleware at all when it is — production
+    has no browser caller and no reason to answer a preflight. A local dev UI served from a
+    different origin is the one caller that needs it, and it opts in explicitly.
     """
     resolved_settings = settings if settings is not None else get_settings()
     configure_logging(resolved_settings)
@@ -91,6 +97,13 @@ def create_app(
     app.state.resources = resolved_resources
     app.state.api_key_verifier = verifier
     app.state.provider_registry = provider_registry
+    if cors_origins is not None:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cors_origins),
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.add_middleware(RequestBoundaryMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)

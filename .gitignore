@@ -26,3 +26,7 @@ artifacts/
 .DS_Store
 .idea/
 .vscode/
+
+# Trial UI (ui/) — a Vite/React dev tool, not shipped code
+ui/node_modules/
+ui/dist/

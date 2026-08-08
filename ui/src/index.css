@@ -1,0 +1,157 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, system-ui, sans-serif;
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+.page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  margin-bottom: 0;
+}
+
+.subtitle {
+  color: #9aa0a6;
+  margin-top: 4px;
+}
+
+.panel {
+  background: #1a1d23;
+  border: 1px solid #2a2e37;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+}
+
+textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 8px;
+  background: #0f1115;
+  color: inherit;
+  border: 1px solid #2a2e37;
+  border-radius: 4px;
+}
+
+button {
+  margin-top: 8px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  background: #3b82f6;
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error {
+  color: #f87171;
+}
+
+.empty {
+  color: #6b7280;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+}
+
+.jobs-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.jobs-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.jobs-list li:hover {
+  background: #22262f;
+}
+
+.jobs-list li.selected {
+  background: #2a3550;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: #2a2e37;
+}
+
+.status-terminal {
+  background: #14532d;
+}
+
+.status-queued {
+  background: #713f12;
+}
+
+.status-running {
+  background: #1e3a8a;
+}
+
+.outcome-SUCCESS {
+  background: #166534;
+}
+
+.outcome-FAILED,
+.outcome-FAILED_NO_PROGRESS {
+  background: #7f1d1d;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  row-gap: 6px;
+  column-gap: 12px;
+  font-size: 14px;
+}
+
+dt {
+  color: #9aa0a6;
+}
+
+dd {
+  margin: 0;
+}
+
+.video-box {
+  margin-top: 16px;
+}
+
+.clip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+code {
+  font-size: 13px;
+}
