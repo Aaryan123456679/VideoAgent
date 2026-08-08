@@ -90,7 +90,9 @@ def _colour_for(job_id: str) -> str:
 
 
 def _label(*, job_id: str, shot_index: int, attempt_no: int) -> str:
-    text = f"{job_id}\\nshot {shot_index}  attempt {attempt_no}"
+    """A real newline byte, not `\\n` — drawtext's line break is the literal byte, and a
+    filtergraph-escaped `\\n` survives ffmpeg's own option parsing as a bare `n`."""
+    text = f"{job_id}\nshot {shot_index}  attempt {attempt_no}"
     return text.replace(":", "\\:").replace("'", "")
 
 

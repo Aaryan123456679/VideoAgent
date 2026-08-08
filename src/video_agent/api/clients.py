@@ -28,11 +28,25 @@ passwords in their userinfo; see the note on `build_cache`.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
+
+import httpx
 
 from video_agent.api.database import Database
 from video_agent.api.idempotency import RedisIdempotencyStore
 from video_agent.api.resources import ResourceFactories
+from video_agent.config.aliases import get_alias_table
+from video_agent.gateway.breaker import (
+    CircuitBreaker,
+    RedisCircuitStateStore,
+    ResilientCircuitStateStore,
+)
+from video_agent.gateway.capabilities import ProxyCapabilityRegistry
+from video_agent.gateway.clock import SystemClock
+from video_agent.gateway.gateway import GatewayDeps, LiteLLMGateway
+from video_agent.gateway.prompts import CachingPromptRegistry, FilePromptRegistry
+from video_agent.gateway.transport import HttpxLiteLLMTransport
 from video_agent.persistence.objects import ArtifactStore, S3ObjectTransport, create_s3_client
 from video_agent.persistence.queue import JobQueue, RedisStreamCommands
 from video_agent.persistence.redis_client import RedisCommands, RedisStore, create_redis_client
@@ -41,6 +55,12 @@ from video_agent.persistence.session import create_database_engine
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from video_agent.api.idempotency import IdempotencyStore
     from video_agent.config.settings import Settings
+
+_DEFAULT_PROMPTS_ROOT: Path = Path("prompts")
+"""Relative to the process's working directory, same convention as `config/aliases.yaml`'s
+own discovery. No caller has needed anything else built from `Settings` yet — `gateway.md`'s
+own construction of `FilePromptRegistry`/`GatewayDeps` was, until now, exercised only by tests
+and by ad hoc scripts, never by a committed entrypoint."""
 
 
 def build_database(settings: Settings) -> Database:
@@ -133,6 +153,51 @@ def build_object_store(settings: Settings) -> ObjectStore:
     `boto3`; nothing in this module ever holds the plaintext.
     """
     return ObjectStore(S3ObjectTransport(create_s3_client(settings), settings.ARTIFACT_BUCKET))
+
+
+class GatewayResources:
+    """The gateway, as a worker process sees it: something that opens and closes.
+
+    Same shape as `Cache`/`ObjectStore` above — a thin holder over the one thing that owns a
+    connection (`http_client`), so a caller can shut it down without reaching into the
+    `LiteLLMGateway` internals.
+    """
+
+    def __init__(self, http_client: httpx.AsyncClient, gateway: LiteLLMGateway) -> None:
+        self.http_client = http_client
+        self.gateway = gateway
+
+    async def aclose(self) -> None:
+        await self.http_client.aclose()
+
+
+def build_gateway(
+    settings: Settings,
+    *,
+    redis_client: RedisClient,
+    prompts_root: Path = _DEFAULT_PROMPTS_ROOT,
+) -> GatewayResources:
+    """The real `Gateway` a worker calls `plan_story`/`lock_bible` against.
+
+    `redis_client` is accepted rather than built here because a worker already holds one
+    (`Cache.client`, shared with the job queue and lock) and circuit state has no reason to
+    open a second pool. `settings.require_litellm_master_key` is passed as the transport's
+    `key_provider` — a callable, not a captured string — so the key is read fresh per call and
+    never sits in a frame or a `repr`, same discipline `HttpxLiteLLMTransport` documents.
+    """
+    http_client = httpx.AsyncClient(base_url=settings.LITELLM_BASE_URL)
+    transport = HttpxLiteLLMTransport(http_client, settings.require_litellm_master_key)
+    circuit_store = ResilientCircuitStateStore(primary=RedisCircuitStateStore(redis_client))
+    breaker = CircuitBreaker(store=circuit_store, clock=SystemClock())
+    prompts = CachingPromptRegistry(FilePromptRegistry(prompts_root))
+    deps = GatewayDeps(
+        table=get_alias_table(),
+        transport=transport,
+        capabilities=ProxyCapabilityRegistry(transport),
+        prompts=prompts,
+        breaker=breaker,
+    )
+    return GatewayResources(http_client=http_client, gateway=LiteLLMGateway(deps))
 
 
 def default_factories(settings: Settings) -> ResourceFactories:

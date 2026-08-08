@@ -43,6 +43,8 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 from video_agent.observability.alarms import AlarmCounter
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Awaitable
+
     from video_agent.config.aliases import Alias
     from video_agent.gateway.clock import Clock
 
@@ -244,13 +246,13 @@ class CircuitRedis(Protocol):
     the only reason this protocol exists.
     """
 
-    async def get(self, name: str) -> object: ...
+    def get(self, name: str) -> Awaitable[object]: ...
 
-    async def set(
+    def set(
         self, name: str, value: str, *, ex: int | None = None, nx: bool = False
-    ) -> object: ...
+    ) -> Awaitable[object]: ...
 
-    async def delete(self, *names: str) -> object: ...
+    def delete(self, *names: str) -> Awaitable[object]: ...
 
 
 class CircuitStoreUnavailableError(RuntimeError):
