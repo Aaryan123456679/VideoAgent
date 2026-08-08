@@ -7,6 +7,8 @@ does what §7 says it does.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -17,8 +19,12 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from tests.unit.test_persistence_redis_support import FakeRedis
 from video_agent.config.settings import Settings
+from video_agent.gateway.breaker import CircuitBreaker, InMemoryCircuitStateStore
+from video_agent.gateway.clock import SystemClock
 from video_agent.gateway.models import ArtifactRef
+from video_agent.persistence.redis_client import RedisStore
 from video_agent.providers.errors import (
     ProviderCredentialRejectedError,
     ProviderPaymentRequiredError,
@@ -30,12 +36,14 @@ from video_agent.providers.errors import (
     ProviderUnprocessableEntityError,
 )
 from video_agent.providers.magichour import (
+    WEBHOOK_SIGNATURE_HEADER,
     ArtifactStore,
     MagicHourClient,
     MagicHourProvider,
     _build_profile,
 )
 from video_agent.providers.models import ShotRequest
+from video_agent.providers.registry import PinnedProviderRegistry
 
 API_KEY = "mhk-test-credential-for-tests"
 """A fake, and named so it is not mistaken for one."""
@@ -100,15 +108,23 @@ def build_provider(
     *,
     clock: FakeClock | None = None,
     artifacts: ArtifactStore | None = None,
+    webhook_cache: RedisStore | None = None,
+    webhook_secret: str | None = None,
 ) -> tuple[MagicHourProvider, FakeClock]:
     http_client = httpx.AsyncClient(base_url="http://magichour.invalid", transport=routed.transport)
     client = MagicHourClient(http_client, lambda: API_KEY)
     real_clock = clock or FakeClock()
+    provider_settings = (
+        settings(MAGICHOUR_WEBHOOK_SECRET=SecretStr(webhook_secret))
+        if webhook_secret is not None
+        else settings()
+    )
     provider = MagicHourProvider(
-        settings=settings(),
+        settings=provider_settings,
         client=client,
         artifacts=artifacts or FakeArtifactStore(),
         clock=cast(Any, real_clock),
+        webhook_cache=webhook_cache,
     )
     return provider, real_clock
 
@@ -320,3 +336,112 @@ def test_a_model_that_cannot_serve_the_fixed_beat_duration_fails_at_construction
 def test_an_unknown_model_fails_at_construction_rather_than_defaulting_silently() -> None:
     with pytest.raises(ValueError, match="no known duration constraints"):
         _build_profile(settings(MAGICHOUR_MODEL="totally-unknown-model"))
+
+
+# --- webhooks: an accelerant over polling, providers.md §7.3 -------------------------------
+
+SIGNING_VALUE = "webhook-shared-credential-for-tests"
+"""A fake, and named so it is not mistaken for one."""
+
+
+def _signed(body: bytes, secret: str = SIGNING_VALUE) -> dict[str, str]:
+    signature = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return {WEBHOOK_SIGNATURE_HEADER: signature}
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_rejects_a_bad_signature() -> None:
+    transport = route({})
+    provider, _clock = build_provider(transport, webhook_secret=SIGNING_VALUE)
+    body = json.dumps({"id": "proj-1"}).encode()
+    headers = {WEBHOOK_SIGNATURE_HEADER: "wrong"}
+    verified = await provider.handle_webhook(raw_body=body, headers=headers)
+    assert verified is False
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_rejects_a_missing_signature_header() -> None:
+    transport = route({})
+    provider, _clock = build_provider(transport, webhook_secret=SIGNING_VALUE)
+    body = json.dumps({"id": "proj-1"}).encode()
+    assert await provider.handle_webhook(raw_body=body, headers={}) is False
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_rejects_a_body_with_no_recognisable_id() -> None:
+    transport = route({})
+    provider, _clock = build_provider(transport, webhook_secret=SIGNING_VALUE)
+    body = json.dumps({"event": "video.completed"}).encode()
+    verified = await provider.handle_webhook(raw_body=body, headers=_signed(body))
+    assert verified is False
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_never_calls_get_video_project_itself() -> None:
+    """`providers.md` §7.3: a webhook only ever triggers a *later* re-read by the poll loop —
+    it must never be the source of truth, and it must never fetch that truth either."""
+    transport = route({})
+    cache = RedisStore(cast(Any, FakeRedis()))
+    provider, _clock = build_provider(transport, webhook_secret=SIGNING_VALUE, webhook_cache=cache)
+    body = json.dumps({"id": "proj-1"}).encode()
+    verified = await provider.handle_webhook(raw_body=body, headers=_signed(body))
+    assert verified is True
+    assert transport.seen == []  # no HTTP call was made
+
+
+@pytest.mark.asyncio
+async def test_a_verified_webhook_makes_the_poll_loop_skip_its_sleep() -> None:
+    transport = route(
+        {
+            "/v1/text-to-video": httpx.Response(200, json=SUBMIT_RESPONSE),
+            "/v1/video-projects/proj-1": httpx.Response(200, json=COMPLETE_RESPONSE),
+            "/clip.mp4": httpx.Response(200, content=b"fake mp4 bytes"),
+        }
+    )
+    cache = RedisStore(cast(Any, FakeRedis()))
+    provider, clock = build_provider(transport, webhook_secret=SIGNING_VALUE, webhook_cache=cache)
+    body = json.dumps({"id": "proj-1"}).encode()
+    assert await provider.handle_webhook(raw_body=body, headers=_signed(body)) is True
+
+    await provider.generate(a_request(), ctx=cast(Any, None))
+
+    assert clock.sleeps == []  # the flag was already there, so the sleep never ran
+
+
+@pytest.mark.asyncio
+async def test_no_webhook_cache_configured_is_identical_to_today_pure_polling() -> None:
+    """The default (`webhook_cache=None`) must change nothing about existing behaviour."""
+    transport = route(
+        {
+            "/v1/text-to-video": httpx.Response(200, json=SUBMIT_RESPONSE),
+            "/v1/video-projects/proj-1": httpx.Response(200, json=COMPLETE_RESPONSE),
+            "/clip.mp4": httpx.Response(200, content=b"fake mp4 bytes"),
+        }
+    )
+    provider, _clock = build_provider(transport)
+    result = await provider.generate(a_request(), ctx=cast(Any, None))
+    assert result.provider_project_id == "proj-1"
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatches_a_verified_webhook_to_the_provider_that_recognises_it() -> None:
+    transport = route({})
+    provider, _clock = build_provider(transport, webhook_secret=SIGNING_VALUE)
+    registry = PinnedProviderRegistry(
+        providers=(provider,),
+        breaker=CircuitBreaker(store=InMemoryCircuitStateStore(), clock=SystemClock()),
+    )
+    body = json.dumps({"id": "proj-1"}).encode()
+    assert await registry.handle_webhook(raw_body=body, headers=_signed(body)) is True
+
+
+@pytest.mark.asyncio
+async def test_registry_returns_false_when_no_provider_recognises_the_delivery() -> None:
+    transport = route({})
+    provider, _clock = build_provider(transport, webhook_secret=SIGNING_VALUE)
+    registry = PinnedProviderRegistry(
+        providers=(provider,),
+        breaker=CircuitBreaker(store=InMemoryCircuitStateStore(), clock=SystemClock()),
+    )
+    body = json.dumps({"id": "proj-1"}).encode()
+    assert await registry.handle_webhook(raw_body=body, headers={"X-Wrong-Header": "x"}) is False

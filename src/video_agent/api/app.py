@@ -35,6 +35,7 @@ from video_agent.api.health import router as health_router
 from video_agent.api.jobs import router as jobs_router
 from video_agent.api.middleware import RequestBoundaryMiddleware
 from video_agent.api.resources import Resources, open_resources
+from video_agent.api.webhooks import router as webhooks_router
 from video_agent.config.settings import get_settings
 from video_agent.observability.logging import configure_logging, get_logger
 
@@ -43,6 +44,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from video_agent.api.principal import ApiKeyVerifier
     from video_agent.config.settings import Settings
+    from video_agent.providers.models import ProviderRegistry
 
 _LOGGER: Final = get_logger(__name__)
 
@@ -56,12 +58,15 @@ def create_app(
     *,
     resources: Resources | None = None,
     verifier: ApiKeyVerifier | None = None,
+    provider_registry: ProviderRegistry | None = None,
 ) -> FastAPI:
     """Build a configured application.
 
-    All three parameters exist so a test can substitute a dependency, and for no other reason:
-    production calls `create_app()` with nothing and gets the real settings, the real clients
-    and the deny-everything verifier that `T0.5`'s credential store will replace.
+    All parameters exist so a test can substitute a dependency, and for no other reason:
+    production calls `create_app()` with nothing and gets the real settings, the real clients,
+    the deny-everything verifier that `T0.5`'s credential store will replace, and no provider
+    webhook registry — `api.webhooks` answers `503` until one is supplied, which is a real,
+    working configuration (polling is what runs with none at all), not a placeholder.
     """
     resolved_settings = settings if settings is not None else get_settings()
     configure_logging(resolved_settings)
@@ -85,9 +90,11 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.resources = resolved_resources
     app.state.api_key_verifier = verifier
+    app.state.provider_registry = provider_registry
     app.add_middleware(RequestBoundaryMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(jobs_router)
     app.include_router(artifacts_router)
+    app.include_router(webhooks_router)
     return app

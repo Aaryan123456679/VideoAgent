@@ -61,6 +61,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from video_agent.api.principal import ApiKeyVerifier
+    from video_agent.providers.models import ProviderRegistry
 
 TENANT_A: Final = UUID("11111111-1111-1111-1111-111111111111")
 TENANT_B: Final = UUID("22222222-2222-2222-2222-222222222222")
@@ -381,6 +382,7 @@ def build_app(
     *,
     resources: Resources | None = None,
     verifier: ApiKeyVerifier | None = None,
+    provider_registry: ProviderRegistry | None = None,
     probes: bool = True,
 ) -> FastAPI:
     """The real `create_app`, with fakes injected and the probe routes optionally mounted."""
@@ -388,6 +390,7 @@ def build_app(
         get_settings(),
         resources=resources if resources is not None else build_resources(),
         verifier=verifier,
+        provider_registry=provider_registry,
     )
     if probes:
         app.include_router(probe_router)

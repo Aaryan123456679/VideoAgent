@@ -35,6 +35,9 @@ live account is available.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -47,6 +50,8 @@ import httpx
 from video_agent.gateway.clock import Clock, SystemClock
 from video_agent.gateway.models import ArtifactRef
 from video_agent.observability.logging import get_logger
+from video_agent.persistence.keys import provider_webhook_key
+from video_agent.persistence.redis_client import RedisStore
 from video_agent.providers.errors import (
     ProviderCredentialRejectedError,
     ProviderPaymentRequiredError,
@@ -67,7 +72,7 @@ from video_agent.providers.models import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping
 
     from video_agent.config.settings import Settings
     from video_agent.harness.context import NodeContext
@@ -102,6 +107,18 @@ SHOT_DURATION_S = 10.0
 
 POLL_INTERVAL_S = 2.0
 """How long `generate()` waits between polls once a render is in flight. `providers.md` §7.3."""
+
+WEBHOOK_SIGNATURE_HEADER = "X-Magic-Hour-Signature"
+"""The header this adapter reads the delivery's HMAC-SHA256 signature from. Not confirmed
+against Magic Hour's own documentation — a best-effort, industry-standard assumption (the same
+scheme and header shape most webhook senders use) rather than a guess left unmarked. This is the
+one line to correct if a real delivery's header name turns out to differ; nothing else in
+`handle_webhook` depends on the exact name."""
+
+_WEBHOOK_ID_FIELDS: Final = ("id", "project_id")
+"""Field names tried, in order, to find the render id in a webhook body. `providers.md` §7.3:
+the payload is never trusted for status or cost — only for which id to re-read — so accepting
+either spelling costs nothing and a wrong guess here only skips the accelerant, never trust."""
 
 _MODEL_DURATION_CONSTRAINTS: dict[str, tuple[float, float, frozenset[float] | None]] = {
     "wan-2.2": (3.0, 10.0, None),
@@ -370,6 +387,12 @@ class MagicHourProvider:
     client: MagicHourClient
     artifacts: ArtifactStore
     clock: Clock = field(default_factory=SystemClock)
+    webhook_cache: RedisStore | None = None
+    """Where `handle_webhook` publishes a verified delivery's re-read result and where
+    `_poll_until_terminal` checks for one, keyed by `persistence.keys.provider_webhook_key`.
+    `None` (the default) is a real, working configuration — webhook support is an accelerant
+    over polling, never a replacement for it, so every existing construction of this class
+    keeps its current behaviour unchanged unless a caller opts in."""
     profile: ProviderProfile = field(init=False)
     _lookups: dict[str, ShotResult] = field(default_factory=dict, init=False)
 
@@ -460,7 +483,64 @@ class MagicHourProvider:
             if elapsed >= timeout_s:
                 message = f"render {project_id} did not reach a terminal state within {timeout_s}s"
                 raise ProviderTimeoutError(message)
-            await self.clock.sleep(POLL_INTERVAL_S)
+            if not await self._notified(project_id):
+                await self.clock.sleep(POLL_INTERVAL_S)
+
+    async def _notified(self, project_id: str) -> bool:
+        """Whether `handle_webhook` flagged this project since the last check. Consumes the
+        flag: a webhook that names a non-terminal status (`video.started`) must not turn the
+        remaining wait into a sleepless loop hammering `get_video_project` until the flag's TTL
+        expires, so a read here is also a delete, and the next iteration sleeps normally again
+        unless another delivery re-flags it.
+
+        `True` skips the sleep and loops straight back to `get_video_project` — the *only*
+        place this class ever reads status, cost or a download url, webhook or not. The flag
+        itself carries none of that: `[D-52]` bans a download url from ever landing in a
+        persisted row, and a cached `PollResult` would be exactly that the moment a render
+        completes. This is purely an accelerant over the fixed poll interval, `providers.md`
+        §7.3 — a cache miss (no flag, or none configured) changes nothing about correctness.
+        """
+        if self.webhook_cache is None:
+            return False
+        key = provider_webhook_key(self.profile.provider_key, project_id)
+        flag = await self.webhook_cache.get(key)
+        if flag is None:
+            return False
+        await self.webhook_cache.delete(key)
+        return True
+
+    async def handle_webhook(self, *, raw_body: bytes, headers: Mapping[str, str]) -> bool:
+        """Verify one delivery's signature, then flag the render it names for an early re-read.
+
+        `providers.md` §7.3: the payload is never trusted for status or cost, and this method
+        never calls `get_video_project` itself — it only tells `_poll_until_terminal` to stop
+        waiting out its interval and make that call sooner. The flag it writes is the id alone;
+        no field from the payload or from a subsequent poll is ever persisted here.
+        """
+        signature = headers.get(WEBHOOK_SIGNATURE_HEADER)
+        if not signature:
+            return False
+        secret = self.settings.require_magichour_webhook_secret()
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return False
+        try:
+            payload = json.loads(raw_body)
+        except ValueError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        project_id = next(
+            (payload[field] for field in _WEBHOOK_ID_FIELDS if isinstance(payload.get(field), str)),
+            None,
+        )
+        if not project_id:
+            return False
+        if self.webhook_cache is not None:
+            await self.webhook_cache.set(
+                provider_webhook_key(self.profile.provider_key, project_id), project_id
+            )
+        return True
 
     @staticmethod
     def _finalize_status(submission: SubmitResult, poll: PollResult) -> Exception | None:

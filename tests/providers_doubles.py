@@ -92,6 +92,13 @@ class FakeProvider:
     async def health(self) -> ProviderHealth:
         return ProviderHealth(provider_key=self.profile.provider_key, healthy=True)
 
+    async def handle_webhook(self, *, raw_body: bytes, headers: object) -> bool:
+        """No test double exercises this — every webhook test constructs a real
+        `MagicHourProvider` (`test_providers_magichour.py`), since the behaviour under test is
+        the adapter's own signature verification. This exists only to satisfy `VideoProvider`."""
+        del raw_body, headers
+        return False
+
 
 def full_capability_provider(
     key: str = "full",

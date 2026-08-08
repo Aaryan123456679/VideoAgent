@@ -13,6 +13,7 @@ any later shot can consult the pin.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -56,6 +57,19 @@ class PinnedProviderRegistry:
 
     def select(self, required: frozenset[Capability]) -> list[VideoProvider]:
         return select_providers(required, self.providers)
+
+    async def handle_webhook(self, *, raw_body: bytes, headers: Mapping[str, str]) -> bool:
+        """Try each provider's own verification until one recognises the delivery.
+
+        Sequential rather than concurrent: a webhook delivery is one HTTP request, has one
+        answer, and the group is small — there is nothing to parallelise and a provider whose
+        `handle_webhook` has a side effect (it does: a verified delivery re-reads and caches
+        status) must not run speculatively against a delivery meant for a different provider.
+        """
+        for provider in self.providers:
+            if await provider.handle_webhook(raw_body=raw_body, headers=headers):
+                return True
+        return False
 
     async def generate(self, req: ShotRequest, *, ctx: NodeContext) -> ShotResult:
         negotiation = negotiate(req, self.providers)

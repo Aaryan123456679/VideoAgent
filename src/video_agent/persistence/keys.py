@@ -52,6 +52,7 @@ class KeyName(StrEnum):
     CIRCUIT_BREAKER = "circuit_breaker"
     LLM_CACHE = "llm_cache"
     CANCEL_SIGNAL = "cancel_signal"
+    PROVIDER_WEBHOOK = "provider_webhook"
 
 
 class RedisType(StrEnum):
@@ -137,6 +138,12 @@ CANCEL_SIGNAL_TTL_SECONDS: Final = 24 * SECONDS_PER_HOUR
 to reach for, and a stray flag under a tiny string key costs nothing to leave a day longer.
 The worker deletes it once the harness observes it, so the ordinary lifetime is seconds."""
 
+PROVIDER_WEBHOOK_TTL_SECONDS: Final = 30 * 60
+"""30 minutes: comfortably longer than any provider's own poll timeout, so a webhook that
+arrives before the polling loop even starts checking is still there when it does. Short
+because a hit is read once, immediately, by the same attempt that is already waiting on it —
+nothing reads a webhook flag from a different superstep."""
+
 KEY_REGISTRY: Final[dict[KeyName, KeySpec]] = {
     KeyName.IDEMPOTENCY: KeySpec(
         pattern="idem:{tenant}:{route}:{key}",
@@ -200,6 +207,13 @@ KEY_REGISTRY: Final[dict[KeyName, KeySpec]] = {
         ttl_policy=TtlPolicy.FIXED,
         ttl_seconds=CANCEL_SIGNAL_TTL_SECONDS,
         purpose="Cooperative cancel signal for the job's harness loop [D-12]",
+    ),
+    KeyName.PROVIDER_WEBHOOK: KeySpec(
+        pattern="webhook:{provider_key}:{external_id}",
+        redis_type=RedisType.STRING,
+        ttl_policy=TtlPolicy.FIXED,
+        ttl_seconds=PROVIDER_WEBHOOK_TTL_SECONDS,
+        purpose="Inbound provider webhook re-read result, an accelerant over polling",
     ),
 }
 """`persistence.md` §5, transcribed once. `test_all_documented_keys_have_constructors` diffs
@@ -378,6 +392,31 @@ def cancel_signal_key(job_id: UUID) -> RedisKey:
     return _render(KeyName.CANCEL_SIGNAL, job_id=str(job_id))
 
 
+def provider_webhook_key(provider_key: str, external_id: str) -> RedisKey:
+    """`webhook:{provider_key}:{external_id}` — an inbound webhook's re-read result, cached.
+
+    **The cross-process webhook contract, spelled out once, here.** A provider's callback
+    arrives at the API process, which has no in-memory reference to the graph worker that is
+    mid-poll for that same render — the same cross-process gap `cancel_signal_key` documents,
+    solved the same way: a Redis key neither process needs the other's memory to read or write.
+
+    Named by `provider_key` (`ProviderProfile.provider_key`), never by a concrete provider's
+    name — this key pattern is shared by every provider that ever gains webhook support, not
+    written once per adapter.
+
+    - **Written by** the concrete `VideoProvider`'s own `handle_webhook()`, after verifying the
+      delivery's signature and re-reading the render's *actual* status from the provider's own
+      status endpoint — never from the webhook body itself, which is untrusted content.
+    - **Read by** the same provider's polling loop, once per iteration, before it would
+      otherwise wait for the next scheduled poll — a hit lets it return immediately instead of
+      waiting out the interval.
+    - **TTL** `PROVIDER_WEBHOOK_TTL_SECONDS` (30m): long enough that a webhook arriving before
+      polling begins is still there when it does, short enough that a flag nobody ever reads
+      (a request that was abandoned, a process that crashed) does not linger.
+    """
+    return _render(KeyName.PROVIDER_WEBHOOK, provider_key=provider_key, external_id=external_id)
+
+
 KEY_CONSTRUCTORS: Final[dict[KeyName, str]] = {
     KeyName.IDEMPOTENCY: idempotency_key.__name__,
     KeyName.JOB_LOCK: job_lock_key.__name__,
@@ -388,6 +427,7 @@ KEY_CONSTRUCTORS: Final[dict[KeyName, str]] = {
     KeyName.CIRCUIT_BREAKER: circuit_breaker_key.__name__,
     KeyName.LLM_CACHE: llm_cache_key.__name__,
     KeyName.CANCEL_SIGNAL: cancel_signal_key.__name__,
+    KeyName.PROVIDER_WEBHOOK: provider_webhook_key.__name__,
 }
 """Registry entry to the function that renders it. The test resolves each name against this
 module, so an entry naming a function that does not exist is a failure rather than a comment."""

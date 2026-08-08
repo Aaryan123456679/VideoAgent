@@ -10,6 +10,7 @@ no branch anywhere in this module or `negotiate.py`/`registry.py` on which provi
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -162,6 +163,18 @@ class VideoProvider(Protocol):
 
     async def health(self) -> ProviderHealth: ...
 
+    async def handle_webhook(self, *, raw_body: bytes, headers: Mapping[str, str]) -> bool:
+        """Verify and process one inbound webhook delivery, `providers.md` §7.3.
+
+        `True` means this provider recognised and verified the delivery (whether or not the
+        render it names is this provider's own); `False` means it was not this provider's
+        signature at all, so the caller should try the next candidate or answer `401`. The
+        payload itself is never trusted for status or cost — a provider that supports this
+        method treats it purely as a trigger to re-read its own authoritative status endpoint.
+        A provider with no webhook support returns `False` unconditionally.
+        """
+        ...
+
 
 class ProviderRegistry(Protocol):
     """The single entry point graph nodes call. `providers.md` §2."""
@@ -169,6 +182,15 @@ class ProviderRegistry(Protocol):
     def select(self, required: frozenset[Capability]) -> list[VideoProvider]: ...
 
     async def generate(self, req: ShotRequest, *, ctx: NodeContext) -> ShotResult: ...
+
+    async def handle_webhook(self, *, raw_body: bytes, headers: Mapping[str, str]) -> bool:
+        """Dispatch one inbound webhook delivery to whichever provider recognises it.
+
+        `providers.md` §7.3: a webhook is untrusted content; every implementation calls a
+        provider's own `handle_webhook`, never inspects the payload itself. `False` if no
+        provider in the group recognised the delivery.
+        """
+        ...
 
 
 class ArtifactStore(Protocol):
