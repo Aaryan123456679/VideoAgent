@@ -33,19 +33,15 @@ export default function App() {
   }, []);
 
   const refreshDetail = useCallback(async (jobId) => {
-    if (!jobId) return;
+    if (!jobId) return null;
     try {
       const job = await getJob(jobId);
       setDetail(job);
       setDetailError(null);
-      if (job.status === "terminal") {
-        const list = await getArtifacts(jobId);
-        setArtifacts(list.artifacts);
-      } else {
-        setArtifacts(null);
-      }
+      return job;
     } catch (err) {
       setDetailError(err.message);
+      return null;
     }
   }, []);
 
@@ -55,12 +51,52 @@ export default function App() {
     return () => clearInterval(id);
   }, [refreshList]);
 
+  // Polls job status/current_node/budget while the job is still moving, and stops once it
+  // reaches a terminal state — a terminal job never changes again, so there is nothing to
+  // poll for, and polling anyway would only exist to cause the artifact refetch below.
   useEffect(() => {
+    setDetail(null);
+    setArtifacts(null);
     if (!selectedId) return undefined;
-    refreshDetail(selectedId);
-    const id = setInterval(() => refreshDetail(selectedId), POLL_MS);
-    return () => clearInterval(id);
+
+    let stopped = false;
+    let intervalId = null;
+
+    async function tick() {
+      const job = await refreshDetail(selectedId);
+      if (stopped) return;
+      if (job && job.status === "terminal" && intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    }
+
+    tick();
+    intervalId = setInterval(tick, POLL_MS);
+    return () => {
+      stopped = true;
+      if (intervalId !== null) clearInterval(intervalId);
+    };
   }, [selectedId, refreshDetail]);
+
+  // Artifacts carry a freshly-minted presigned URL every time they're fetched (`[D-52]`: no
+  // URL is ever stored, so there is no "the same" URL to re-request). Fetching them once per
+  // terminal job — never on an interval — is what keeps a <video>'s `src` stable; refetching
+  // on a timer would hand the element a new URL every tick and restart playback from zero.
+  useEffect(() => {
+    if (!selectedId || !detail || detail.status !== "terminal" || artifacts) return undefined;
+    let cancelled = false;
+    getArtifacts(selectedId)
+      .then((list) => {
+        if (!cancelled) setArtifacts(list.artifacts);
+      })
+      .catch((err) => {
+        if (!cancelled) setDetailError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, detail, artifacts]);
 
   async function handleCreate(event) {
     event.preventDefault();
