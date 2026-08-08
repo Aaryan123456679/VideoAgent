@@ -189,3 +189,14 @@ async def test_lock_bible_fails_after_two_vague_drafts() -> None:
         await lock_bible(
             _plan(), "subject matter", ctx=_ctx("lock_bible"), gateway=_FakeGateway([vague, vague])
         )
+
+
+@pytest.mark.asyncio
+async def test_a_bare_or_in_an_enumeration_is_not_treated_as_vague() -> None:
+    """A real model's negative-constraints list reads "no text, logos, or captions" — an
+    ordinary enumeration, not hedging. `or` alone must never fail the specificity gate."""
+    draft = _bible_draft(facial_features="a scar over the left eyebrow or cheekbone, faded")
+    bible = await lock_bible(
+        _plan(), "subject matter", ctx=_ctx("lock_bible"), gateway=_FakeGateway([draft])
+    )
+    assert bible.content_hash != "pending"

@@ -43,7 +43,12 @@ __all__ = ["lock_bible", "plan_story"]
 _MAX_ATTEMPTS = 2
 """One structured re-ask, never a second. `[D-28]`."""
 
-_HEDGE_WORDS = frozenset({"some", "perhaps", "various", "or", "maybe", "possibly", "several"})
+_HEDGE_WORDS = frozenset({"some", "perhaps", "various", "maybe", "possibly", "several"})
+"""Words that express imprecision regardless of what surrounds them. `"or"` was here too until
+a real model's negative-constraints list — "no on-screen text, logos, or captions" — proved
+every one of them a false positive: a bare `"or"` is a structural conjunction joining an
+enumeration, not a hedge, and any bible with more than one negative constraint uses one. The
+six that remain each name genuine uncertainty on their own, independent of sentence shape."""
 _HEDGE_RE = re.compile(
     r"\b(" + "|".join(re.escape(word) for word in _HEDGE_WORDS) + r")\b", re.IGNORECASE
 )
