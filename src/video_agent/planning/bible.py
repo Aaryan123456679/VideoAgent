@@ -24,8 +24,16 @@ def _canonical_json(payload: dict[str, Any]) -> str:
 
 
 def compute_content_hash(bible: ContinuityBible) -> str:
-    """sha256 over the bible's canonical JSON, excluding `content_hash` itself."""
-    payload = bible.model_dump(mode="json", exclude={"content_hash"})
+    """sha256 over the bible's canonical JSON, excluding `content_hash` and `locked_at`.
+
+    `locked_at` is write-time metadata, not content: `persistence.schema`'s `continuity_bible`
+    table gives it a server-side `now()` default, so the row's stored value is always a few
+    microseconds later than whatever the in-memory object held the instant this function first
+    hashed it. Including it here would make a bible loaded fresh from Postgres fail its own
+    hash check every time — not because anything about the bible changed, but because the two
+    reads of "now" never agree. Only what the bible *says* determines its identity.
+    """
+    payload = bible.model_dump(mode="json", exclude={"content_hash", "locked_at"})
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 

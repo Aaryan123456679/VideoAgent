@@ -74,9 +74,20 @@ def test_verify_bible_accepts_matching_hash() -> None:
 def test_verify_bible_rejects_mutated_content() -> None:
     provisional = _bible()
     correct = provisional.model_copy(update={"content_hash": compute_content_hash(provisional)})
-    mutated = correct.model_copy(update={"locked_at": datetime.now(UTC)})
+    mutated = correct.model_copy(update={"negative_constraints": ["a different constraint"]})
     with pytest.raises(BibleHashMismatchError):
         verify_bible(mutated)
+
+
+def test_locked_at_does_not_affect_the_hash() -> None:
+    """`locked_at` is write-time metadata, not content: `persistence.schema`'s server-side
+    `now()` default means the stored value is never exactly what was first hashed, so a bible
+    reloaded from Postgres must not fail this check purely because time passed on the way in.
+    """
+    provisional = _bible()
+    correct = provisional.model_copy(update={"content_hash": compute_content_hash(provisional)})
+    reloaded = correct.model_copy(update={"locked_at": datetime.now(UTC)})
+    verify_bible(reloaded)  # does not raise
 
 
 def test_render_bible_block_is_deterministic_and_stable_ordered() -> None:
