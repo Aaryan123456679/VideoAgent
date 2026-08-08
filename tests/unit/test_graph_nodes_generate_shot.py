@@ -204,6 +204,19 @@ def install_fake_repositories(monkeypatch: pytest.MonkeyPatch, db: FakeDB) -> No
                 )
             return db.shots[key]
 
+        async def record_attempt(self, shot_id: UUID, *, attempts_used: int) -> None:
+            key, record = next((k, r) for k, r in db.shots.items() if r.id == shot_id)
+            db.shots[key] = ShotRecord(
+                id=record.id,
+                job_id=record.job_id,
+                idx=record.idx,
+                status=record.status,
+                attempts_used=attempts_used,
+                repairs_used=record.repairs_used,
+                best_attempt_id=record.best_attempt_id,
+                best_score=record.best_score,
+            )
+
     class FakeShotAttemptRepository:
         def __init__(self, session: object) -> None:
             del session

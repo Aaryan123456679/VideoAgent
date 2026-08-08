@@ -449,6 +449,9 @@ async def _settle_shot_and_checkpoint(
                 shot_index=state.shot_index,
             )
         )
+        await ShotRepository(session).record_attempt(
+            outcome.claim.attempt.shot_id, attempts_used=outcome.attempt_no
+        )
 
         updated_shot = shot.model_copy(
             update={"attempts_used": outcome.attempt_no, "clip_artifact_id": artifact_record.id}
@@ -708,23 +711,50 @@ async def qc_shot_node(state: JobState, deps: GraphDeps) -> dict[str, Any]:
     exercised and demonstrated without pretending the scoring itself exists.
     """
     shot = state.shots[state.shot_index]
-    if state.shot_index in deps.harness.force_repair_shots and shot.repairs_used < MAX_REPAIRS:
-        deps.harness.force_repair_shots.discard(state.shot_index)
-        repaired = shot.model_copy(
+
+    async with tenant_session(deps.engine, state.tenant_id) as session:
+        shot_row = await ShotRepository(session).get_by_job_and_idx(
+            state.job_id, state.shot_index
+        )
+        if shot_row is None:
+            message = (
+                f"qc_shot reached for job {state.job_id} shot {state.shot_index} with no "
+                "shot row; generate_shot's _claim_shot_attempt should have created one"
+            )
+            raise GraphInvariantError(message)
+
+        if (
+            state.shot_index in deps.harness.force_repair_shots
+            and shot.repairs_used < MAX_REPAIRS
+        ):
+            deps.harness.force_repair_shots.discard(state.shot_index)
+            repaired = shot.model_copy(
+                update={
+                    "status": ShotStatus.PENDING,
+                    "repairs_used": shot.repairs_used + 1,
+                }
+            )
+            await ShotRepository(session).record_qc_decision(
+                shot_row.id,
+                status=repaired.status,
+                repairs_used=repaired.repairs_used,
+                best_score=None,
+            )
+            shots = tuple(repaired if s.index == state.shot_index else s for s in state.shots)
+            return {"shots": shots}
+
+        accepted = shot.model_copy(
             update={
-                "status": ShotStatus.PENDING,
-                "repairs_used": shot.repairs_used + 1,
+                "status": ShotStatus.ACCEPTED,
+                "best_score": 1.0,
             }
         )
-        shots = tuple(repaired if s.index == state.shot_index else s for s in state.shots)
-        return {"shots": shots}
-
-    accepted = shot.model_copy(
-        update={
-            "status": ShotStatus.ACCEPTED,
-            "best_score": 1.0,
-        }
-    )
+        await ShotRepository(session).record_qc_decision(
+            shot_row.id,
+            status=accepted.status,
+            repairs_used=accepted.repairs_used,
+            best_score=Decimal(str(accepted.best_score)),
+        )
     shots = tuple(
         accepted if s.index == state.shot_index else s for s in state.shots
     )

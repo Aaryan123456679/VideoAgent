@@ -42,6 +42,7 @@ from video_agent.persistence.enums import (
     BeatKind,
     JobOutcome,
     JobStatus,
+    ShotStatus,
 )
 from video_agent.persistence.schema import (
     artifact,
@@ -615,6 +616,41 @@ class ShotRepository(_Repository):
             )
             raise VideoAgentError(message)
         return _shot_record(existing)
+
+    async def get_by_job_and_idx(self, job_id: UUID, idx: int) -> ShotRecord | None:
+        """The row `ensure` created for this shot, or `None` if `generate_shot` has never
+        run for it yet. `qc_shot_node` has no other way to find a shot's row: `ShotState`
+        carries only `index`, never the row's own id."""
+        row = await self._fetch_one(
+            select(*_SHOT_COLUMNS).where(shot.c.job_id == job_id, shot.c.idx == idx)
+        )
+        return None if row is None else _shot_record(row)
+
+    async def record_attempt(self, shot_id: UUID, *, attempts_used: int) -> None:
+        """Mirror `ShotState.attempts_used` onto the row `_settle_shot_and_checkpoint` already
+        has open. Nothing before this call ever wrote the row again after `ensure()` created
+        it — the graph's in-memory state was the only place this number lived."""
+        statement = (
+            update(shot)
+            .where(shot.c.id == shot_id, shot.c.tenant_id == self.tenant_id)
+            .values(attempts_used=attempts_used)
+        )
+        await self._session.execute(statement)
+
+    async def record_qc_decision(
+        self, shot_id: UUID, *, status: ShotStatus, repairs_used: int, best_score: Decimal | None
+    ) -> None:
+        """Mirror `qc_shot_node`'s decision onto the row. Whatever `status`/`repairs_used`/
+        `best_score` are passed here is exactly what the in-memory `ShotState` was just given
+        — this repository has no QC opinion of its own, real or stubbed. `shot_repairs_used_ck`
+        and `shot_best_score_ck` are the schema's own backstop if that ever stops being true.
+        """
+        statement = (
+            update(shot)
+            .where(shot.c.id == shot_id, shot.c.tenant_id == self.tenant_id)
+            .values(status=status.value, repairs_used=repairs_used, best_score=best_score)
+        )
+        await self._session.execute(statement)
 
 
 class ShotAttemptRepository(_Repository):
