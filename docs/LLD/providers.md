@@ -59,6 +59,10 @@ Four concerns:
 > Deviations this forces on the PRD are recorded honestly rather than hidden: **no seed
 > control** `[D-59]`, **cost in credits rather than USD** `[D-60]`, **model pinned for the 10s
 > shot length** `[D-61]`, and **720p as the configured v1 target** `[D-63]`.
+>
+> The pinned model itself was later amended from `wan-2.2` to `ltx-2.3` `[D-61, amended]` —
+> same measured cost, same 10s support, but faster, and render/queue latency was the actual
+> problem the amendment fixed, not cost.
 
 Magic Hour is the first adapter, *not* the interface. The word `magichour` appears in exactly
 one adapter module and in config — never in a caller. `[CPS §Model routing]`, `[D-06]`
@@ -164,7 +168,7 @@ def required_for(shot: ShotRequest) -> frozenset[Capability]:
 | Capability | Declared | Note |
 | --- | --- | --- |
 | `IMAGE_CONDITIONING` | **yes** | `POST /v1/image-to-video` with `assets.image_file_path`. **This is the capability the substitution turned on** `[D-58]`, and it is never waivable `[D-31]` |
-| `DURATION_10S` | **yes**, model-dependent | `wan-2.2` allows 3–10s and 15s. `sora-2` allows only 4, 8, 12, 24, 36, 48, 60 — it **cannot** produce 10s `[D-61]` |
+| `DURATION_10S` | **yes**, model-dependent | The pinned `ltx-2.3` and the earlier-pinned `wan-2.2` both allow 10s. `sora-2` allows only 4, 8, 12, 24, 36, 48, 60 — it **cannot** produce 10s `[D-61, amended]` |
 | `ASPECT_16_9` | yes | |
 | `RES_720P` / `RES_1080P` | yes / yes | v1 configures 720p (`MAGICHOUR_RESOLUTION`) `[D-63]` |
 | `ASYNC_POLL` | yes | `GET /v1/video-projects/{id}` |
@@ -298,10 +302,10 @@ below are contractual; **nothing outside this section may be assumed about the u
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `end_seconds` | **yes** | float, min 1, max 60, **further constrained per model**. `wan-2.2`: 3–10 and 15. `sora-2`: only 4, 8, 12, 24, 36, 48, 60 `[D-61]` |
+| `end_seconds` | **yes** | float, min 1, max 60, **further constrained per model**. `ltx-2.3` (pinned): 3–30. `wan-2.2`: 3–10 and 15. `sora-2`: only 4, 8, 12, 24, 36, 48, 60 `[D-61, amended]` |
 | `assets.image_file_path` | **yes** | `minLength 1`. Accepts **either a direct public URL or a `file_path` returned by the upload-URLs endpoint**, e.g. `api-assets/id/1234.png` |
 | `assets.end_image_file_path` | no | Not supported by `wan-2.2` or `sora-2`. Unused in v1 |
-| `model` | no | Enum below; v1 pins `wan-2.2` `[D-61]` |
+| `model` | no | Enum below; v1 pins `ltx-2.3` (amended from `wan-2.2`) `[D-61, amended]` |
 | `resolution` | no | v1 sends `MAGICHOUR_RESOLUTION` (720p) `[D-63]` |
 | `style.prompt` | no | The composed prompt from §5 |
 | `name` | no | Set to `job_id:shot_index:attempt_no` for support traceability |
@@ -468,7 +472,7 @@ Consumed by [`graph.md`](./graph.md) only.
 | Injection | MCP tool responses containing instruction-shaped text; assert they are discarded and never reach the next prompt. |
 | Contract (recorded) | Recorded Magic Hour HTTP transcripts (`upload-urls`, `image-to-video`, `text-to-video`, `video-projects` across every `status` value) replayed in CI, so an upstream API change fails a test rather than a production job — the "an API change is not an outage" promise, made testable `[PRD §Resilience]`. |
 | Cost | Assert credits→USD conversion derives from `MAGICHOUR_USD_PER_1K_CREDITS` and that no rate literal exists in the tree `[D-65]`; assert a provisional charge is reconciled **exactly once** at terminal status; assert a refunded `error`/`canceled` render returns its credits to the ledger `[D-60]`; assert a volume discount never reduces a **pre-flight** estimate `[D-65]`. |
-| Duration guard | Startup validation test: configuring `sora-2` (which cannot do 10s) **fails the deploy**; `wan-2.2` passes `[D-61]`. The profile is static and asserted against the documented enum — there is no discovery call to mock `[D-34, amended]`. |
+| Duration guard | Startup validation test: configuring `sora-2` (which cannot do 10s) **fails the deploy**; `ltx-2.3` (pinned) and `wan-2.2` both pass `[D-61, amended]`. The profile is static and asserted against the documented enum — there is no discovery call to mock `[D-34, amended]`. |
 | `402` handling | Assert `402` produces zero retries, maps to `VA-PROV-009`, terminates `FAILED`/`ESCALATED`, and preserves every accepted shot `[D-62]`. |
 | Upload flow | Assert the `upload-urls` response order matches the request order; assert an expired `expires_at` triggers a fresh URL rather than a retry of the stale `PUT`; assert `file_path` (not our own presigned URL) is what reaches `image_file_path` `[D-64]`. |
 | Credential leakage | Assert `upload_url` and `downloads[].url` never appear in a log line, span attribute or persisted row — they carry auth in the query string `[D-52]`. |

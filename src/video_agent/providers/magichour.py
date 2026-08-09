@@ -25,12 +25,13 @@ adapter's own `lookup()` is a process-local echo of what `generate()` last produ
 for an in-loop retry, not a substitute for the caller re-reading `GET /v1/video-projects/{id}`
 by the persisted project id after a crash.
 
-**Placeholder rates.** `_MODEL_CREDITS_PER_SECOND` is this adapter's estimate of how many
-credits are charged per second of rendered video, per model — a fact a pricing page would
-supply and the visible spec excerpt does not. `price_per_second` is still derived from
-`MAGICHOUR_USD_PER_1K_CREDITS` and never a separate hardcoded USD literal `[D-65]`; only the
-credits-per-second multiplier is a placeholder, confined to this module, correctable once a
-live account is available.
+**Rates, and which ones are still placeholders.** `_MODEL_CREDITS_PER_SECOND` is this adapter's
+estimate of how many credits are charged per second of rendered video, per model — a fact a
+pricing page would supply and the visible spec excerpt does not. `price_per_second` is still
+derived from `MAGICHOUR_USD_PER_1K_CREDITS` and never a separate hardcoded USD literal `[D-65]`.
+`wan-2.2` and `ltx-2.3`'s entries are no longer placeholders — a live account confirmed the real
+`credits_charged` for each at 10s/480p; models without a live measurement remain placeholders,
+confined to this module, correctable once one exists.
 """
 
 from __future__ import annotations
@@ -124,17 +125,27 @@ either spelling costs nothing and a wrong guess here only skips the accelerant, 
 
 _MODEL_DURATION_CONSTRAINTS: dict[str, tuple[float, float, frozenset[float] | None]] = {
     "wan-2.2": (3.0, 10.0, None),
+    "ltx-2.3": (3.0, 30.0, None),
     "sora-2": (4.0, 60.0, frozenset({4.0, 8.0, 12.0, 24.0, 36.0, 48.0, 60.0})),
 }
 """(min_duration_s, max_duration_s, allowed_durations_s) per model. `providers.md` §7.1, `[D-61]`.
-A model absent here is refused at construction rather than silently defaulting."""
+A model absent here is refused at construction rather than silently defaulting.
+
+`ltx-2.3`'s upper bound (30s) is confirmed from Magic Hour's own model comparison; its lower
+bound is not independently verified against a live account and is carried over from `wan-2.2`
+as the closest documented analogue (both are open-weight models served through the same
+endpoint) — what *is* live-verified is that the fixed 10s beat length this adapter always
+requests is accepted."""
 
 _MODEL_CREDITS_PER_SECOND: dict[str, Decimal] = {
-    "wan-2.2": Decimal("50"),
+    "wan-2.2": Decimal("24"),
+    "ltx-2.3": Decimal("24"),
     "sora-2": Decimal("100"),
 }
-"""Placeholder estimates — see the module docstring. Never used for billing, only for
-`price_per_second` (negotiation ranking) and the caller's pre-flight budget estimate."""
+"""`wan-2.2` and `ltx-2.3` are measured, not placeholders: a live account was charged exactly
+240 credits for a 10s/480p render on each, i.e. 24 credits/second at that resolution — this
+table does not vary by resolution, so treat it as accurate at 480p and an approximation
+elsewhere. `sora-2` remains an unverified placeholder; see the module docstring."""
 
 _DEFAULT_CREDITS_PER_SECOND = Decimal("50")
 

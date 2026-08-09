@@ -70,7 +70,11 @@ class Settings(BaseSettings):
     # that actually calls the provider may demand it. See `require_magichour_api_key`.
     MAGICHOUR_API_KEY: SecretStr
     MAGICHOUR_BASE_URL: str = "https://api.magichour.ai"
-    MAGICHOUR_MODEL: str = "wan-2.2"
+    # `ltx-2.3` over `wan-2.2`: same measured cost (240 credits for a 10s/480p shot) and same
+    # 10s duration support, but `wan-2.2` optimises for output quality at the expense of
+    # render speed while `ltx-2.3` is the faster of the two per Magic Hour's own comparison —
+    # and queue/render time, not credits, was the actual bottleneck this was chosen to fix.
+    MAGICHOUR_MODEL: str = "ltx-2.3"
     # 1080p is a hard ceiling: nothing above it is offered at the 10s clip length v1 needs,
     # and a higher value would be accepted by the provider only to be billed and refused.
     # "480p" is a temporary account-tier accommodation, not a product option — see
