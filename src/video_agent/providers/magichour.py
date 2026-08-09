@@ -83,8 +83,10 @@ __all__ = [
     "MagicHourClient",
     "MagicHourProvider",
     "PollResult",
+    "RotatingApiKey",
     "SubmitResult",
     "UploadSlot",
+    "build_magichour_provider",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -189,6 +191,47 @@ class UploadSlot:
     upload_url: str
     file_path: str
     expires_at: datetime
+
+
+@dataclass
+class RotatingApiKey:
+    """Cycles forward through multiple credentials, advancing only on a `402`.
+
+    Every other failure means something the *same* account cannot recover from by retrying
+    with a different one either, so `[D-62]`'s "a 402 is never retried" still holds — what
+    changed is that a second, independent account can succeed where the first one's balance
+    cannot. Never wraps back to an earlier key: once one is exhausted mid-job, staying on the
+    next one for the rest of that render — and every later one — is the point; bouncing back
+    to a key that already 402'd would just 402 again.
+
+    Satisfies `MagicHourClient`'s `key_provider: Callable[[], str]` directly — nothing about
+    the client changes to support this; only `MagicHourProvider.generate()` knows a rotator
+    exists at all, and only so it can call `.advance()`.
+    """
+
+    keys: tuple[str, ...]
+    _index: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        if not self.keys:
+            message = "RotatingApiKey needs at least one key"
+            raise ValueError(message)
+
+    def __call__(self) -> str:
+        return self.keys[self._index]
+
+    @property
+    def index(self) -> int:
+        """Which key is current, for observability only — never logged as more than a number."""
+        return self._index
+
+    @property
+    def has_next(self) -> bool:
+        return self._index + 1 < len(self.keys)
+
+    def advance(self) -> None:
+        if self.has_next:
+            self._index += 1
 
 
 class MagicHourClient:
@@ -393,6 +436,12 @@ class MagicHourProvider:
     `None` (the default) is a real, working configuration — webhook support is an accelerant
     over polling, never a replacement for it, so every existing construction of this class
     keeps its current behaviour unchanged unless a caller opts in."""
+    key_rotator: RotatingApiKey | None = None
+    """The same rotator, if any, that `client`'s `key_provider` was built from — set only by
+    `build_magichour_provider` when `Settings.magichour_api_keys()` returns more than one key.
+    `None` (the default) means single-key behaviour is unchanged: nothing here retries a `402`
+    against itself, matching every existing construction of this class before this field
+    existed."""
     profile: ProviderProfile = field(init=False)
     _lookups: dict[str, ShotResult] = field(default_factory=dict, init=False)
 
@@ -405,26 +454,7 @@ class MagicHourProvider:
         model = self.settings.MAGICHOUR_MODEL
         name = f"{req.job_id}:{req.shot_index}:{req.attempt_no}"
 
-        if req.shot_index == 0:
-            submission = await self.client.submit_text_to_video(
-                prompt=req.prompt,
-                duration_s=req.duration_s,
-                resolution=req.resolution,
-                aspect_ratio=req.aspect_ratio,
-                model=model,
-                name=name,
-            )
-        else:
-            image_file_path = await self._upload_conditioning_frame(req)
-            submission = await self.client.submit_image_to_video(
-                prompt=req.prompt,
-                duration_s=req.duration_s,
-                resolution=req.resolution,
-                aspect_ratio=req.aspect_ratio,
-                model=model,
-                name=name,
-                image_file_path=image_file_path,
-            )
+        submission = await self._submit_with_rotation(req, model=model, name=name)
 
         poll = await self._poll_until_terminal(submission.project_id, timeout_s=req.timeout_s)
         result = self._finalize_status(submission, poll)
@@ -453,6 +483,46 @@ class MagicHourProvider:
         )
         self._lookups[req.request_fingerprint] = shot_result
         return shot_result
+
+    async def _submit_with_rotation(
+        self, req: ShotRequest, *, model: str, name: str
+    ) -> SubmitResult:
+        """Submit once; on `402`, advance `key_rotator` (if any) and submit again.
+
+        Safe to retry unconditionally: a `402` is a rejection, not a charge — nothing was
+        created upstream, so resubmitting is not a second render of anything. Every other
+        failure propagates immediately without touching the rotator; a `402` is the one
+        rejection where a *different* account can plausibly answer differently, which is the
+        whole reason `key_rotator` exists (`[D-62]` is still about not retrying one account).
+        """
+        while True:
+            try:
+                if req.shot_index == 0:
+                    return await self.client.submit_text_to_video(
+                        prompt=req.prompt,
+                        duration_s=req.duration_s,
+                        resolution=req.resolution,
+                        aspect_ratio=req.aspect_ratio,
+                        model=model,
+                        name=name,
+                    )
+                image_file_path = await self._upload_conditioning_frame(req)
+                return await self.client.submit_image_to_video(
+                    prompt=req.prompt,
+                    duration_s=req.duration_s,
+                    resolution=req.resolution,
+                    aspect_ratio=req.aspect_ratio,
+                    model=model,
+                    name=name,
+                    image_file_path=image_file_path,
+                )
+            except ProviderPaymentRequiredError:
+                if self.key_rotator is None or not self.key_rotator.has_next:
+                    raise
+                self.key_rotator.advance()
+                _LOGGER.warning(
+                    "magichour_key_rotated", extra={"key_index": self.key_rotator.index}
+                )
 
     async def lookup(self, request_fingerprint: str) -> ShotResult | None:
         """A process-local echo of what `generate()` last produced for this fingerprint. Not a
@@ -559,6 +629,30 @@ class MagicHourProvider:
             raise ProviderRenderFailedError("a complete render carried no download url")
         data = await self.client.download(poll.download_url)
         return await self.artifacts.write(content_type="video/mp4", data=data)
+
+
+def build_magichour_provider(
+    settings: Settings, *, artifacts: ArtifactStore
+) -> tuple[MagicHourProvider, httpx.AsyncClient]:
+    """The real adapter, wired from settings — plus the `httpx.AsyncClient` it owns, so the
+    caller can close it when done (the same shape `api.clients.GatewayResources` uses for the
+    LLM gateway's own client, for the same reason).
+
+    Rotates through `Settings.magichour_api_keys()` automatically: one configured key behaves
+    exactly as every existing construction of this class already does — `key_rotator` is only
+    set at all once there is a second key to fall back to.
+    """
+    keys = settings.magichour_api_keys()
+    rotator = RotatingApiKey(keys=keys)
+    http_client = httpx.AsyncClient(base_url=settings.MAGICHOUR_BASE_URL)
+    client = MagicHourClient(http_client, rotator)
+    provider = MagicHourProvider(
+        settings=settings,
+        client=client,
+        artifacts=artifacts,
+        key_rotator=rotator if len(keys) > 1 else None,
+    )
+    return provider, http_client
 
 
 def _build_profile(settings: Settings) -> ProviderProfile:

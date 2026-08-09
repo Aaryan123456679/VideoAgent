@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # providers.models.Capability.RES_480P's docstring for why it exists and when to remove it.
     MAGICHOUR_RESOLUTION: Literal["480p", "720p", "1080p"] = "720p"
     MAGICHOUR_WEBHOOK_SECRET: SecretStr = SecretStr("")
+    # A second credential to rotate onto when the first is rejected for insufficient credits
+    # (402). Optional — empty means single-key behaviour, unchanged. `[D-62]` still holds that
+    # a 402 is never retried against the *same* credential; this exists only for the case
+    # where a second, genuinely different account can succeed where the first cannot.
+    MAGICHOUR_API_KEY_2: SecretStr = SecretStr("")
     # Undiscounted list rate for the account's tier. See the module docstring and [D-65].
     MAGICHOUR_USD_PER_1K_CREDITS: Decimal = Field(default=Decimal("0.90"), gt=0)
 
@@ -185,6 +190,20 @@ class Settings(BaseSettings):
         naming the variable instead of a 401 from an upstream.
         """
         return self._require(self.MAGICHOUR_API_KEY, "MAGICHOUR_API_KEY", "call Magic Hour")
+
+    def magichour_api_keys(self) -> tuple[str, ...]:
+        """The configured provider credentials, in rotation order.
+
+        Always at least the primary key (raising the same way `require_magichour_api_key`
+        does if even that one is empty); `MAGICHOUR_API_KEY_2` is appended only if set. Order
+        matters — `providers.magichour.RotatingApiKey` advances forward through this tuple and
+        never wraps, so the primary account is always tried first.
+        """
+        keys = [self.require_magichour_api_key()]
+        secondary = self.MAGICHOUR_API_KEY_2.get_secret_value()
+        if secondary:
+            keys.append(secondary)
+        return tuple(keys)
 
     def require_magichour_webhook_secret(self) -> str:
         """Return the webhook signing secret, raising if it is empty.

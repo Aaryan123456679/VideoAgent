@@ -382,6 +382,14 @@ caller ever sees a provider-shaped error:
   model that cannot do 10s therefore fails the deploy rather than every job `[D-61]`. The
   original `[D-34]` wording assumed MCP tool discovery; that mechanism does not exist on this
   transport.
+- **Multi-key rotation is a scoped exception to `[D-62]`, not a repeal of it.** `[D-62]` says a
+  `402` is never retried because a retry against the *same* account cannot succeed — that
+  reasoning is unchanged. `providers.magichour.RotatingApiKey` (wired in only when
+  `Settings.magichour_api_keys()` configures a second credential, e.g. for demo/trial capacity
+  across two accounts) advances to a *different* account specifically because a different
+  balance can succeed where the first one's cannot. Single-key deployments see no behaviour
+  change: `MagicHourProvider.key_rotator` defaults to `None`, and a `402` still terminates
+  exactly as this section describes.
 
 ### 7.5 Cost accounting `[D-60]`
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, cast
@@ -40,6 +41,7 @@ from video_agent.providers.magichour import (
     ArtifactStore,
     MagicHourClient,
     MagicHourProvider,
+    RotatingApiKey,
     _build_profile,
 )
 from video_agent.providers.models import ShotRequest
@@ -110,9 +112,11 @@ def build_provider(
     artifacts: ArtifactStore | None = None,
     webhook_cache: RedisStore | None = None,
     webhook_secret: str | None = None,
+    key_provider: Callable[[], str] | None = None,
+    key_rotator: RotatingApiKey | None = None,
 ) -> tuple[MagicHourProvider, FakeClock]:
     http_client = httpx.AsyncClient(base_url="http://magichour.invalid", transport=routed.transport)
-    client = MagicHourClient(http_client, lambda: API_KEY)
+    client = MagicHourClient(http_client, key_provider or (lambda: API_KEY))
     real_clock = clock or FakeClock()
     provider_settings = (
         settings(MAGICHOUR_WEBHOOK_SECRET=SecretStr(webhook_secret))
@@ -125,6 +129,7 @@ def build_provider(
         artifacts=artifacts or FakeArtifactStore(),
         clock=cast(Any, real_clock),
         webhook_cache=webhook_cache,
+        key_rotator=key_rotator,
     )
     return provider, real_clock
 
@@ -445,3 +450,81 @@ async def test_registry_returns_false_when_no_provider_recognises_the_delivery()
     )
     body = json.dumps({"id": "proj-1"}).encode()
     assert await registry.handle_webhook(raw_body=body, headers={"X-Wrong-Header": "x"}) is False
+
+
+# --- key rotation -----------------------------------------------------------------------
+
+SECOND_KEY = "mhk-test-second-credential-for-tests"
+"""A fake, distinct from `API_KEY`, so a rotation is visible as a different header value."""
+EXPECTED_ROTATED_SUBMIT_CALLS = 2
+
+
+def test_a_fresh_rotator_starts_at_the_first_key() -> None:
+    rotator = RotatingApiKey(keys=(API_KEY, SECOND_KEY))
+    assert rotator() == API_KEY
+    assert rotator.index == 0
+    assert rotator.has_next is True
+
+
+def test_advance_moves_to_the_next_key_and_stops_at_the_last() -> None:
+    rotator = RotatingApiKey(keys=(API_KEY, SECOND_KEY))
+    rotator.advance()
+    assert rotator() == SECOND_KEY
+    assert rotator.index == 1
+    assert rotator.has_next is False
+    rotator.advance()  # no third key — never wraps back to the first
+    assert rotator() == SECOND_KEY
+
+
+def test_a_rotator_needs_at_least_one_key() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        RotatingApiKey(keys=())
+
+
+@pytest.mark.asyncio
+async def test_a_402_rotates_to_the_second_key_and_the_retry_succeeds() -> None:
+    transport = route(
+        {
+            "/v1/text-to-video": [
+                httpx.Response(402, json={"message": "insufficient credits"}),
+                httpx.Response(200, json=SUBMIT_RESPONSE),
+            ],
+            "/v1/video-projects/proj-1": httpx.Response(200, json=COMPLETE_RESPONSE),
+            "/clip.mp4": httpx.Response(200, content=b"fake mp4 bytes"),
+        }
+    )
+    rotator = RotatingApiKey(keys=(API_KEY, SECOND_KEY))
+    provider, _clock = build_provider(transport, key_provider=rotator, key_rotator=rotator)
+
+    result = await provider.generate(a_request(), ctx=cast(Any, None))
+
+    assert result.provider_project_id == "proj-1"
+    assert rotator.index == 1
+    submit_calls = [r for r in transport.seen if r.url.path == "/v1/text-to-video"]
+    assert len(submit_calls) == EXPECTED_ROTATED_SUBMIT_CALLS
+    assert submit_calls[0].headers["authorization"] == f"Bearer {API_KEY}"
+    assert submit_calls[1].headers["authorization"] == f"Bearer {SECOND_KEY}"
+
+
+@pytest.mark.asyncio
+async def test_without_a_rotator_a_402_is_never_retried() -> None:
+    transport = route({"/v1/text-to-video": httpx.Response(402, json={"message": "nope"})})
+    provider, _clock = build_provider(transport)  # no key_rotator: default None
+
+    with pytest.raises(ProviderPaymentRequiredError):
+        await provider.generate(a_request(), ctx=cast(Any, None))
+
+    assert len([r for r in transport.seen if r.url.path == "/v1/text-to-video"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_402_with_no_further_keys_still_raises() -> None:
+    transport = route({"/v1/text-to-video": httpx.Response(402, json={"message": "nope"})})
+    rotator = RotatingApiKey(keys=(API_KEY,))  # only one key — has_next is always False
+    provider, _clock = build_provider(transport, key_provider=rotator, key_rotator=rotator)
+
+    with pytest.raises(ProviderPaymentRequiredError):
+        await provider.generate(a_request(), ctx=cast(Any, None))
+
+    assert rotator.index == 0
+    assert len([r for r in transport.seen if r.url.path == "/v1/text-to-video"]) == 1
