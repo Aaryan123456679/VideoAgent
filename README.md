@@ -55,6 +55,9 @@ between shots, and a vision-model QC loop that repairs only the shot that broke.
 
 ## Watch the pitch
 
+Recorded demo — a real job run end to end against the live Magic Hour API, shown on the trial
+dashboard: [watch on Google Drive](https://drive.google.com/file/d/10H5C37x4SgAPLIEbYK9ATuuRK94uRzh-/view?usp=sharing).
+
 A ~10-minute walkthrough script, written to be read aloud over a screen recording of the
 architecture diagrams below and the live trial UI: [`PITCH_SCRIPT.md`](./PITCH_SCRIPT.md).
 
