@@ -58,6 +58,11 @@ def render_bible_block(bible: ContinuityBible) -> str:
 
     Its output is hashed into `ShotAttempt.prompt_hash` for reproducibility, so a field
     reordering here would be a silent break of every recorded reproducibility hash.
+
+    Flowing prose, not a labelled spec sheet: a real render provider's prompt endpoint rejected
+    the original `KEY: value` block format outright (`VA-PROV-007`, discovered live) — every
+    field below is still present and in the same stable order, just phrased as sentences instead
+    of headers, which is the shape these APIs actually expect.
     """
     character = bible.character
     wardrobe = bible.wardrobe
@@ -65,44 +70,40 @@ def render_bible_block(bible: ContinuityBible) -> str:
     lighting = bible.lighting
     palette = bible.palette
     lens = bible.lens_language
-    lines = [
-        "CHARACTER:",
-        f"  name: {character.name}",
-        f"  age_appearance: {character.age_appearance}",
-        f"  build: {character.build}",
-        f"  skin_tone: {character.skin_tone}",
-        f"  hair: {character.hair}",
-        f"  facial_features: {character.facial_features}",
-        f"  distinguishing_marks: {character.distinguishing_marks or 'none'}",
-        "WARDROBE:",
-        f"  garments: {', '.join(wardrobe.garments)}",
-        f"  colours: {', '.join(wardrobe.colours)}",
-        f"  materials: {', '.join(wardrobe.materials)}",
-        f"  condition: {wardrobe.condition}",
-        "LOCATION:",
-        f"  setting: {location.setting}",
-        f"  time_of_day: {location.time_of_day}",
-        f"  architecture_or_terrain: {location.architecture_or_terrain}",
-        f"  key_props: {', '.join(location.key_props)}",
-        f"  weather: {location.weather or 'unspecified'}",
-        "LIGHTING:",
-        f"  key_light: {lighting.key_light}",
-        f"  direction: {lighting.direction}",
-        f"  quality: {lighting.quality}",
-        f"  colour_temperature: {lighting.colour_temperature}",
-        f"  contrast_ratio: {lighting.contrast_ratio}",
-        "PALETTE:",
-        f"  dominant: {', '.join(palette.dominant)}",
-        f"  accent: {', '.join(palette.accent)}",
-        f"  saturation: {palette.saturation}",
-        f"  grade: {palette.grade}",
-        "LENS_LANGUAGE:",
-        f"  focal_length: {lens.focal_length}",
-        f"  aperture_feel: {lens.aperture_feel}",
-        f"  framing: {lens.framing}",
-        f"  movement_style: {lens.movement_style}",
-        f"  aspect_ratio: {lens.aspect_ratio}",
-        "NEGATIVE_CONSTRAINTS:",
-        *(f"  - {item}" for item in bible.negative_constraints),
+    marks = f", with {character.distinguishing_marks}" if character.distinguishing_marks else ""
+    sentences = [
+        (
+            f"The subject is {character.name}, appearing {character.age_appearance}, with a "
+            f"{character.build} build, {character.skin_tone} skin, {character.hair}, and "
+            f"{character.facial_features}{marks}."
+        ),
+        (
+            f"They wear {', '.join(wardrobe.garments)} in {', '.join(wardrobe.colours)}, made "
+            f"of {', '.join(wardrobe.materials)}, {wardrobe.condition}."
+        ),
+        (
+            f"The scene is set at {location.setting} during {location.time_of_day}, amid "
+            f"{location.architecture_or_terrain}"
+            + (f", with {', '.join(location.key_props)} visible" if location.key_props else "")
+            + (f", weather {location.weather}" if location.weather else "")
+            + "."
+        ),
+        (
+            f"Lighting is {lighting.key_light}, coming from {lighting.direction}, "
+            f"{lighting.quality} in quality, {lighting.colour_temperature} in colour "
+            f"temperature, with a {lighting.contrast_ratio} contrast ratio."
+        ),
+        (
+            f"The colour palette is dominated by {', '.join(palette.dominant)}"
+            + (f" with {', '.join(palette.accent)} as accents" if palette.accent else "")
+            + f", {palette.saturation} saturation, graded {palette.grade}."
+        ),
+        (
+            f"Shot on a {lens.focal_length} lens, {lens.aperture_feel}, framed as "
+            f"{lens.framing}, with {lens.movement_style} camera movement, {lens.aspect_ratio} "
+            "aspect ratio."
+        ),
     ]
-    return "\n".join(lines)
+    if bible.negative_constraints:
+        sentences.append("Avoid: " + "; ".join(bible.negative_constraints) + ".")
+    return " ".join(sentences)

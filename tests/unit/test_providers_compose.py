@@ -75,15 +75,24 @@ def _beat(*, continuity_note: str | None = None, action: str | None = None) -> B
 
 def test_sections_appear_in_fixed_order() -> None:
     bible = _bible()
-    beat = _beat(continuity_note="jacket still has the tear from beat 0")
+    beat = _beat(
+        action="she steps onto the rooftop and scans the skyline for the signal",
+        continuity_note="jacket still has the tear from beat 0",
+    )
     composed = compose_prompt(bible, beat, repair_delta="tighten the framing", max_chars=4000)
 
     order = [
-        "CONTINUITY BIBLE:", "BEAT ACTION:", "CAMERA:",
-        "CONTINUITY NOTE:", "REPAIR DELTA:", "NEGATIVE:",
+        "The subject is Mira",  # bible block
+        beat.action,
+        "Camera movement:",
+        "Continuity:",
+        "Revision:",
     ]
     positions = [composed.text.index(marker) for marker in order]
     assert positions == sorted(positions)
+    # The bible block ends with its own "Avoid:" sentence, so this section's "Avoid:" (the
+    # last occurrence) must come after everything else, not the bible's own (the first).
+    assert composed.text.rindex("Avoid:") > positions[-1]
     assert not composed.truncated_sections
 
 
@@ -92,8 +101,8 @@ def test_empty_optional_sections_are_dropped() -> None:
     beat = _beat()
     composed = compose_prompt(bible, beat, max_chars=4000)
 
-    assert "CONTINUITY NOTE:" not in composed.text
-    assert "REPAIR DELTA:" not in composed.text
+    assert "Continuity:" not in composed.text
+    assert "Revision:" not in composed.text
 
 
 def test_prompt_hash_is_deterministic_for_the_same_inputs() -> None:

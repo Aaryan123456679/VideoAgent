@@ -5,6 +5,12 @@ renderer every shot shares — that is what makes it byte-identical across all f
 `prompt_hash` reproducible. Truncation, when `max_chars` binds, drops section [4] then [3],
 then compresses [2]; sections [1] and [6] are never touched, and a bible that alone exceeds
 `max_chars` raises rather than generating against a partial one `[D-33]`.
+
+Sections join as flowing prose with no header labels — a real render provider's prompt endpoint
+rejected the original `NAME:\n  body` labelled-block join outright (`VA-PROV-007`, discovered
+live against the real API, not a test). The section *names* below (`"CONTINUITY NOTE"`, etc.)
+still exist and still govern fixed order / drop order / `truncated_sections`; they just never
+appear as literal text in the composed prompt anymore.
 """
 
 from __future__ import annotations
@@ -42,18 +48,21 @@ def compose_prompt(
 ) -> ComposedPrompt:
     """Assemble the fixed six-section prompt for one shot, truncating to fit `max_chars`."""
     bible_block = render_bible_block(bible)
-    camera = beat.camera_move.value
+    camera = beat.camera_move.value.replace("_", " ")
     if bible.lens_language.movement_style:
-        camera = f"{camera} ({bible.lens_language.movement_style})"
+        camera = f"{camera}, {bible.lens_language.movement_style}"
     negative_text = "; ".join(bible.negative_constraints)
 
     sections: list[tuple[str, str]] = [
         ("CONTINUITY BIBLE", bible_block),
         (_BEAT_ACTION, beat.action),
-        ("CAMERA", camera),
-        ("CONTINUITY NOTE", beat.continuity_note or ""),
-        ("REPAIR DELTA", repair_delta or ""),
-        ("NEGATIVE", negative_text),
+        ("CAMERA", f"Camera movement: {camera}."),
+        (
+            "CONTINUITY NOTE",
+            f"Continuity: {beat.continuity_note}." if beat.continuity_note else "",
+        ),
+        ("REPAIR DELTA", f"Revision: {repair_delta}." if repair_delta else ""),
+        ("NEGATIVE", f"Avoid: {negative_text}." if negative_text else ""),
     ]
     sections = [(name, body) for name, body in sections if body]
 
@@ -89,4 +98,4 @@ def compose_prompt(
 
 
 def _render(sections: list[tuple[str, str]]) -> str:
-    return "\n\n".join(f"{name}:\n{body}" for name, body in sections)
+    return " ".join(body for _, body in sections)

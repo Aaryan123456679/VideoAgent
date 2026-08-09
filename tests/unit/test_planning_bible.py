@@ -95,4 +95,14 @@ def test_render_bible_block_is_deterministic_and_stable_ordered() -> None:
     first = render_bible_block(bible)
     second = render_bible_block(bible)
     assert first == second
-    assert first.index("CHARACTER:") < first.index("WARDROBE:") < first.index("LOCATION:")
+    assert first.index("Mira") < first.index("navy field jacket") < first.index("rooftop")
+
+
+def test_render_bible_block_is_flowing_prose_not_a_labelled_spec_sheet() -> None:
+    """A real render provider's prompt endpoint rejected the old `KEY: value` block format
+    outright (`VA-PROV-007`, discovered live) — guard against regressing back to it."""
+    bible = _bible()
+    text = render_bible_block(bible)
+    labels = ("CHARACTER:", "WARDROBE:", "LOCATION:", "LIGHTING:", "PALETTE:", "LENS_LANGUAGE:")
+    for label in labels:
+        assert label not in text

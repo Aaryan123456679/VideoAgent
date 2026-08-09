@@ -4,16 +4,17 @@ Postgres, no graph — just the provider, exactly as `graph.nodes.generate_shot_
 proving key rotation (`providers.magichour.RotatingApiKey`) actually happens against the real
 API when the first credential runs out mid-sequence.
 
-Three shots, not four: at ~240 credits per 10s/480p shot, three fits inside the current
-combined balance across both configured keys with a safety margin; four would not.
+Shot count is a CLI argument (default 3) — at ~240 credits per 10s/480p shot, size it to
+comfortably fit the current combined balance across both configured keys.
 
-Usage: uv run python scripts/real_provider_trial.py
+Usage: uv run python scripts/real_provider_trial.py [shot_count]
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Final, Literal, cast
@@ -39,6 +40,9 @@ TIMEOUT_S = 3600.0
 
 
 async def main() -> None:
+    requested = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    shot_prompts = SHOT_PROMPTS[: min(requested, len(SHOT_PROMPTS))]
+
     settings = get_settings()
     job_id = uuid4()
 
@@ -46,11 +50,14 @@ async def main() -> None:
     artifacts = S3ArtifactStore(transport=object_transport)
     provider, http_client = build_magichour_provider(settings, artifacts=artifacts)
     rotator = provider.key_rotator
-    print(f"job_id={job_id}  keys_configured={len(settings.magichour_api_keys())}")  # noqa: T201
+    print(  # noqa: T201
+        f"job_id={job_id}  keys_configured={len(settings.magichour_api_keys())}  "
+        f"shots={len(shot_prompts)}  model={settings.MAGICHOUR_MODEL}"
+    )
 
     conditioning: ArtifactRef | None = None
     try:
-        for shot_index, prompt in enumerate(SHOT_PROMPTS):
+        for shot_index, prompt in enumerate(shot_prompts):
             key_before = rotator.index if rotator is not None else 0
             fingerprint = compute_request_fingerprint(
                 job_id=job_id,
@@ -81,7 +88,7 @@ async def main() -> None:
             )
             print(f"shot {shot_index}: clip artifact_id={result.clip.artifact_id}")  # noqa: T201
 
-            if shot_index < len(SHOT_PROMPTS) - 1:
+            if shot_index < len(shot_prompts) - 1:
                 clip_bytes = await artifacts.read(result.clip)
                 with tempfile.TemporaryDirectory(prefix=f"real-trial-{job_id}-") as scratch:
                     clip_path = Path(scratch) / "clip.mp4"

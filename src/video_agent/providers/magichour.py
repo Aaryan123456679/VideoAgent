@@ -116,6 +116,14 @@ _HTTP_REQUEST_TIMEOUT_S = 60.0
 time; see `build_magichour_provider`'s docstring for why this and `_PROVIDER_TIMEOUT_S` answer
 different questions and must not be conflated."""
 
+_MAX_PROMPT_CHARS = 1500
+"""Measured live against the real API, not a guess: a 1499-char prompt was accepted, a
+3425-char one rejected with a `400` (`VA-PROV-007`) — the real ceiling sits somewhere between
+the two and was never precisely pinned down. `1500` is the highest value confirmed accepted, so
+`compose_prompt`'s truncation (drop continuity note, then camera, then compress the beat action)
+has a proven-safe target to truncate down to instead of the old, untested `4000` guess that
+caused every real render to fail outright."""
+
 WEBHOOK_SIGNATURE_HEADER = "X-Magic-Hour-Signature"
 """The header this adapter reads the delivery's HMAC-SHA256 signature from. Not confirmed
 against Magic Hour's own documentation — a best-effort, industry-standard assumption (the same
@@ -753,5 +761,5 @@ def _build_profile(settings: Settings) -> ProviderProfile:
         price_per_second=price_per_second,
         credits_per_usd=Decimal(1) / settings.usd_per_credit,
         typical_latency_s=60.0,
-        max_prompt_chars=4000,
+        max_prompt_chars=_MAX_PROMPT_CHARS,
     )
