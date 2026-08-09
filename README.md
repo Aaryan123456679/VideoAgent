@@ -279,6 +279,66 @@ Open the UI, enter a prompt, click **Create video**, and watch `current_node`/`b
 live until the delivered video and all four shot clips play inline. For a one-shot run with no
 UI at all: `uv run python scripts/mock_trial_run.py "your prompt here"`.
 
+## Try it for real — a live Magic Hour run on the same dashboard
+
+Same API, same graph, same UI as above — only the provider differs. This spends real credits
+and produces real rendered clips instead of `MockVideoProvider`'s ffmpeg output.
+
+**1. Get Magic Hour credentials.** Sign up at [magichour.ai](https://magichour.ai/settings/developer)
+and grab a key (`mhk_live_...`). A 10-second `480p`/`720p` clip on the pinned model
+(`ltx-2.3`, `[D-61, amended]`) costs ~240 credits, and one job renders 4 shots — budget **at
+least ~1,000 credits** before starting a job, so a job doesn't die mid-run partway to assembly.
+Split across two accounts is fine too (e.g. 500 + 500): `MagicHourProvider`'s key rotator
+(`RotatingApiKey`, `providers/magichour.py`) automatically advances to the second key only when
+the first is rejected for insufficient credits (`402`) — never for any other failure.
+
+**2. Fill in `.env`** (copy from `.env.example` if you haven't already):
+
+```bash
+MAGICHOUR_API_KEY=mhk_live_...       # your primary key
+MAGICHOUR_API_KEY_2=mhk_live_...     # optional — a second account, rotated onto on 402 only
+MAGICHOUR_MODEL=ltx-2.3
+MAGICHOUR_USD_PER_1K_CREDITS=0.90    # match YOUR account's billing tier — see the comment above
+                                      # this line in .env.example for the tier table
+```
+
+`.env` is git-ignored and must never be committed. The rest of `.env.example`'s fields
+(`DATABASE_URL`, `REDIS_URL`, `ARTIFACT_*`, `LITELLM_*`) already default to the local
+`docker-compose.dev.yml` stack started in the next step, so nothing else needs to change for a
+local run.
+
+**3. Start everything** — four terminals:
+
+```bash
+make compose-up                              # terminal 1 — Postgres, Redis, MinIO, LiteLLM
+uv run python scripts/dev_server.py          # terminal 2 — the real API, no-auth verifier
+uv run python scripts/real_dev_worker.py     # terminal 3 — the real worker, REAL Magic Hour shots
+cd ui && npm install && npm run dev          # terminal 4 — http://localhost:5173
+```
+
+Use `scripts/real_dev_worker.py` here, not `scripts/dev_worker.py` — the latter is hardcoded to
+`MockVideoProvider` and will never call the real API no matter what's in `.env`.
+
+`get_settings()` is cached once per process (`@lru_cache`), so if you edit `.env` — new keys,
+a different model — **after** `dev_server.py`/`real_dev_worker.py` are already running, restart
+both to pick the change up. Editing the file alone does nothing to an already-running process.
+
+Open `http://localhost:5173` (not `127.0.0.1` — the Vite dev server binds the IPv6 loopback) and
+submit a prompt exactly as in the mock walkthrough above. A real 4-shot job has taken anywhere
+from ~6 minutes to well over 30 in testing, since it depends on Magic Hour's live queue depth —
+that variance is expected, not a hang.
+
+To drive it from a terminal instead of the browser (the same tenant sees both, since the
+no-auth dev verifier resolves every request to one fixed trial tenant regardless of who calls):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/jobs \
+  -H "Authorization: Bearer dev-no-auth-placeholder-token-000000" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"prompt": "a violinist plays on a rooftop at dawn as the city wakes below"}'
+```
+
 ## Function-level reference
 
 Every function and class below is grouped by module, with a one-line description and the
