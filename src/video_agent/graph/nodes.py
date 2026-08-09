@@ -305,11 +305,20 @@ capabilities. Composition still runs so the later `deps.providers.generate()` ca
 `NoProviderSatisfiesCapabilitiesError` with a specific message, rather than the composer
 failing first with a less informative one."""
 
-_PROVIDER_TIMEOUT_S = 180.0
+_PROVIDER_TIMEOUT_S = 2700.0
 """One shot's submit-plus-poll ceiling. `GraphDeps` carries no settings object and
 `ShotRequest.timeout_s` has no default, so this is a deliberate constant rather than a
-per-provider value; `MagicHourProvider`'s own `typical_latency_s` is 60s, so 180s leaves
-headroom for a slow render without a node that can hang indefinitely."""
+per-provider value.
+
+**Corrected from an untested 180s.** That figure assumed a real adapter's own
+`typical_latency_s` (60s) needed only 3x headroom — a guess made before any real render had
+been observed. Real queue time on the concrete `VideoProvider` adapter alone has been
+measured at up to ~43 minutes on a free-tier account; 180s was firing on nearly every real
+render, and because `ProviderTimeoutError` is retryable, each firing made
+`PinnedProviderRegistry` submit an entirely new paid render rather than keep waiting on the
+one already in flight — silently multiplying real charges per shot instead of protecting
+against a hung call. 45 minutes is still finite (a node cannot hang indefinitely) but no
+longer shorter than observed reality."""
 
 _SHOT_CLIP_CONTENT_TYPE = "video/mp4"
 _CONTINUITY_FRAME_CONTENT_TYPE = "image/png"

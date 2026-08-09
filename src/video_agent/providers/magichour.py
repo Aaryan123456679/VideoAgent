@@ -111,6 +111,11 @@ SHOT_DURATION_S = 10.0
 POLL_INTERVAL_S = 2.0
 """How long `generate()` waits between polls once a render is in flight. `providers.md` §7.3."""
 
+_HTTP_REQUEST_TIMEOUT_S = 60.0
+"""The ceiling for one HTTP round trip — submit or poll — never for the wait-for-completion
+time; see `build_magichour_provider`'s docstring for why this and `_PROVIDER_TIMEOUT_S` answer
+different questions and must not be conflated."""
+
 WEBHOOK_SIGNATURE_HEADER = "X-Magic-Hour-Signature"
 """The header this adapter reads the delivery's HMAC-SHA256 signature from. Not confirmed
 against Magic Hour's own documentation — a best-effort, industry-standard assumption (the same
@@ -555,9 +560,31 @@ class MagicHourProvider:
         return slot.file_path
 
     async def _poll_until_terminal(self, project_id: str, *, timeout_s: float) -> PollResult:
+        """Poll until terminal, or until `timeout_s` of *elapsed budget* runs out.
+
+        **A single poll request failing is not the render failing.** The render keeps running
+        on Magic Hour's servers whether or not our `GET` happened to succeed; a transient
+        network blip or a slow response on *this one status check* only means "try the status
+        check again," never "abandon this attempt." Letting that kind of failure escape this
+        loop is exactly what turned a flaky poll into a second real paid submission before this
+        was caught: `ProviderTimeoutError`/`ProviderUnavailableError` from a poll is retryable
+        at `PinnedProviderRegistry`'s level, and retrying *there* means calling `generate()`
+        again — a brand new `submit_*` call, not a re-read of the render already in flight.
+        """
         elapsed = 0.0
         while True:
-            poll = await self.client.get_video_project(project_id)
+            try:
+                poll = await self.client.get_video_project(project_id)
+            except (ProviderTimeoutError, ProviderUnavailableError):
+                elapsed += POLL_INTERVAL_S
+                if elapsed >= timeout_s:
+                    message = (
+                        f"render {project_id} did not reach a terminal state within "
+                        f"{timeout_s}s (most recently because polling itself kept failing)"
+                    )
+                    raise ProviderTimeoutError(message) from None
+                await self.clock.sleep(POLL_INTERVAL_S)
+                continue
             if poll.is_terminal:
                 return poll
             elapsed += POLL_INTERVAL_S
@@ -652,10 +679,20 @@ def build_magichour_provider(
     Rotates through `Settings.magichour_api_keys()` automatically: one configured key behaves
     exactly as every existing construction of this class already does — `key_rotator` is only
     set at all once there is a second key to fall back to.
+
+    **`timeout=_HTTP_REQUEST_TIMEOUT_S`, not left at httpx's default.** `MagicHourClient._post`/
+    `._get` never pass a per-call override, so whatever this client is constructed with is the
+    ceiling for *every single request* — submit, poll, and everything else. httpx's own default
+    is 5 seconds, too short even for ordinary API jitter; a poll that times out at 5s is not a
+    slow render, it is this client being unreasonably impatient. This bounds one HTTP round
+    trip, never the wait for a render to finish — that is `_PROVIDER_TIMEOUT_S`'s job, enforced
+    by `_poll_until_terminal`'s own elapsed-time budget across many short polls.
     """
     keys = settings.magichour_api_keys()
     rotator = RotatingApiKey(keys=keys)
-    http_client = httpx.AsyncClient(base_url=settings.MAGICHOUR_BASE_URL)
+    http_client = httpx.AsyncClient(
+        base_url=settings.MAGICHOUR_BASE_URL, timeout=_HTTP_REQUEST_TIMEOUT_S
+    )
     client = MagicHourClient(http_client, rotator)
     provider = MagicHourProvider(
         settings=settings,

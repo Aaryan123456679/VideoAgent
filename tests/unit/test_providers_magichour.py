@@ -263,6 +263,45 @@ async def test_polling_continues_until_a_terminal_status_and_then_downloads_the_
 
 
 @pytest.mark.asyncio
+async def test_a_transient_poll_failure_is_retried_not_treated_as_a_dead_render() -> None:
+    """A `GET` that times out mid-poll must not make `_poll_until_terminal` give up — the
+    render keeps running upstream regardless of whether this one status check succeeded.
+    Letting it propagate would make `PinnedProviderRegistry` treat one flaky poll as a dead
+    attempt and submit an entirely new paid render for the same shot."""
+    poll_calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal poll_calls
+        if request.url.path == "/v1/text-to-video":
+            return httpx.Response(200, json=SUBMIT_RESPONSE)
+        if request.url.path == "/v1/video-projects/proj-1":
+            poll_calls += 1
+            if poll_calls == 1:
+                raise httpx.ReadTimeout("simulated transient poll failure")
+            return httpx.Response(200, json=COMPLETE_RESPONSE)
+        if request.url.path == "/clip.mp4":
+            return httpx.Response(200, content=b"fake mp4 bytes")
+        message = f"unexpected path: {request.url.path}"
+        raise AssertionError(message)
+
+    http_client = httpx.AsyncClient(
+        base_url="http://magichour.invalid", transport=httpx.MockTransport(handle)
+    )
+    clock = FakeClock()
+    artifacts = FakeArtifactStore()
+    client = MagicHourClient(http_client, lambda: API_KEY)
+    provider = MagicHourProvider(
+        settings=settings(), client=client, artifacts=artifacts, clock=cast(Any, clock)
+    )
+
+    result = await provider.generate(a_request(), ctx=cast(Any, None))
+
+    assert result.cost_is_final is True
+    expected_poll_calls = 2  # first failed transiently, second succeeded — never a re-submit
+    assert poll_calls == expected_poll_calls
+
+
+@pytest.mark.asyncio
 async def test_a_terminal_error_status_raises_a_repairable_render_failed_error() -> None:
     """`providers.md` §7.4: `VA-PROV-012`, eligible for repair — the request was valid."""
     error_response = {"status": "error", "error": {"code": "content_policy", "message": "nope"}}
