@@ -17,6 +17,8 @@ changes face, the room changes colour, the story never moves. This product is th
 engine around the generator — a planned 4-beat arc, a locked continuity bible, frame chaining
 between shots, and a vision-model QC loop that repairs only the shot that broke.
 
+## Demo Video Link : https://drive.google.com/file/d/10H5C37x4SgAPLIEbYK9ATuuRK94uRzh-/view?uuspsharing
+
 > **Status: design complete; implementation scoped to E0 + E1 + E2.** The documents here
 > describe the **full** system design. The current build target is foundation, job lifecycle,
 > planning, continuity bible, the Magic Hour adapter, frame chaining, assembly and delivery.
