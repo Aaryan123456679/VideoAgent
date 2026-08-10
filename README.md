@@ -1,13 +1,3 @@
----
-doc: README
-title: Video Agent — navigation
-status: canonical
-version: 1
-last_synced_commit: 438138573aa69c26727651b368e056262908bc69
-generated_by: cdr-documentation
-run_id: 2026-08-08/001-documentation
----
-
 # Video Agent
 
 One prompt becomes a continuous 40-second story — four 10-second shots with enforced
